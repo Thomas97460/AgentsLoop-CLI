@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 from typing import ClassVar, cast
@@ -45,6 +46,7 @@ from agentsloop.runtime.workflow_launcher import spawn_workflow_process
 from agentsloop.storage.json_store import RunStore
 from agentsloop.tui.widgets import (
     LargeLogo,
+    LoadingLogo,
     node_report_markdown,
     populate_events,
     populate_nodes_table,
@@ -62,19 +64,19 @@ class WarningScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         """Compose the warning view."""
-        with Vertical(classes="warning-container"):
-            with Vertical(classes="warning-panel"):
-                yield Label("CRITICAL SECURITY WARNING", classes="warning-title")
-                yield Static(
-                    "Agents operate in autonomous (YOLO) mode. It is critical to run them "
-                    "in a controlled environment and ensure your repository's main branch is protected.\n\n"
-                    "Users are solely responsible for all actions performed by the agents; no liability "
-                    "is assumed for any unintended consequences or damages.",
-                    classes="warning-text",
-                )
-                with Horizontal(classes="actions centered-actions"):
-                    yield Button("I Understand & Accept", variant="success", id="accept")
-                    yield Button("Quit", variant="error", id="quit")
+        with Vertical(classes="warning-container"), Vertical(classes="warning-panel"):
+            yield Label("CRITICAL SECURITY WARNING", classes="warning-title")
+            yield Static(
+                "Agents operate in autonomous (YOLO) mode. It is critical to run them "
+                "in a controlled environment and ensure your repository's main branch is "
+                "protected.\n\nUsers are solely responsible for all actions performed "
+                "by the agents; no liability is assumed for any unintended consequences "
+                "or damages.",
+                classes="warning-text",
+            )
+            with Horizontal(classes="actions centered-actions"):
+                yield Button("I Understand & Accept", variant="success", id="accept")
+                yield Button("Quit", variant="error", id="quit")
 
     @on(Button.Pressed, "#accept")
     def accept(self) -> None:
@@ -106,10 +108,10 @@ class SSHKeySelectionScreen(Screen[None]):
                     "This key must have write access to the repository.",
                     classes="hint",
                 )
-                
+
                 options = [(str(key), str(key)) for key in self.available_keys]
                 default_value = str(self.project_context.ssh_key_path)
-                
+
                 # Ensure the current key is in options even if not in common discovery
                 if default_value not in [opt[1] for opt in options]:
                     options.insert(0, (default_value, default_value))
@@ -120,14 +122,14 @@ class SSHKeySelectionScreen(Screen[None]):
                     id="ssh_key_select",
                     prompt="Choose an SSH key",
                 )
-                
+
                 yield Label("OR ENTER CUSTOM PATH", classes="field-label")
                 yield Input(
                     value=default_value,
                     placeholder="~/.ssh/your_key",
                     id="ssh_key_custom",
                 )
-                
+
                 yield Static("", id="test-status", classes="hint")
 
             with Horizontal(classes="actions centered-actions"):
@@ -153,7 +155,7 @@ class SSHKeySelectionScreen(Screen[None]):
         if not ssh_key_str:
             self.notify("SSH key path is required", severity="error")
             return
-            
+
         ssh_key = Path(ssh_key_str).expanduser()
         if not ssh_key.exists():
             self.notify(f"SSH key not found: {ssh_key}", severity="error")
@@ -167,25 +169,22 @@ class SSHKeySelectionScreen(Screen[None]):
         try:
             # env_with_agent_ssh and verify_git_write_access are blocking
             # We wrap them to keep the UI alive.
-            import asyncio
 
-            def check():
+            def check() -> None:
                 env = env_with_agent_ssh(self.project_context.repo_root, ssh_key_path=ssh_key)
                 verify_git_write_access(self.project_context.repo_root, env)
 
             await asyncio.to_thread(check)
-            
+
             # Update the context
             self.project_context.ssh_key_path = ssh_key
             # If already configured, we might want to update the stored config too
             if self.project_context.configured:
-                self.project_context.save_config(
-                    self.project_context.validation_command, ssh_key
-                )
+                self.project_context.save_config(self.project_context.validation_command, ssh_key)
 
             # Success, move to the next screen
             self._finish_selection()
-            
+
         except Exception as exc:
             self._handle_test_error(str(exc))
 
@@ -380,7 +379,6 @@ class LaunchScreen(Screen[None]):
     async def _fetch_branches(self) -> None:
         """Fetch remote branches in the background."""
         try:
-            import asyncio
             env = env_with_agent_ssh(
                 self.project_context.repo_root, ssh_key_path=self.project_context.ssh_key_path
             )
@@ -511,14 +509,13 @@ class WorkflowScreen(Screen[None]):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "app.pop_screen", "Back"),
-        ("r", "refresh", "Refresh"),
     ]
 
     def __init__(self, store: RunStore, task_id: str) -> None:
         super().__init__()
         self.store = store
         self.task_id = task_id
-        self._last_nodes_count = -1
+        self._last_nodes_hash = 0
 
     def compose(self) -> ComposeResult:
         """Compose the workflow screen."""
@@ -549,9 +546,10 @@ class WorkflowScreen(Screen[None]):
         try:
             state = self.store.load_state(self.task_id)
             nodes = state.node_runs
+            nodes_hash = hash(str(nodes))
 
-            # Only update nodes table if count changed or first run
-            if len(nodes) != self._last_nodes_count:
+            # Update nodes table if count OR status changed
+            if nodes_hash != self._last_nodes_hash:
                 table = self.query_one("#nodes", DataTable)
                 current_key = None
                 try:
@@ -563,7 +561,7 @@ class WorkflowScreen(Screen[None]):
                     pass
 
                 populate_nodes_table(table, nodes)
-                self._last_nodes_count = len(nodes)
+                self._last_nodes_hash = nodes_hash
 
                 # Reselect or select last
                 if current_key:
@@ -573,8 +571,6 @@ class WorkflowScreen(Screen[None]):
                         table.move_cursor(row=len(nodes) - 1)
                 elif len(nodes) > 0:
                     table.move_cursor(row=len(nodes) - 1)
-
-                self._update_report(state)
 
             # Always refresh the current report content to show live progress
             self._update_report(state)
@@ -597,6 +593,8 @@ class WorkflowScreen(Screen[None]):
     def _update_report(self, state: WorkflowState) -> None:
         """Update the Markdown report for the selected node."""
         table = self.query_one("#nodes", DataTable)
+        report_panel = self.query_one("#workflow-report-panel")
+
         if table.row_count == 0:
             return
 
@@ -609,6 +607,19 @@ class WorkflowScreen(Screen[None]):
                 (n for n in state.node_runs if n.role == role and n.iteration == iteration), None
             )
             if node:
-                self.query_one("#report", Markdown).update(node_report_markdown(node))
+                content = node_report_markdown(node)
+                if content is None:
+                    # Clear existing content and show loading logo
+                    for widget in report_panel.children:
+                        widget.remove()
+                    report_panel.mount(LoadingLogo())
+                else:
+                    # Ensure Markdown component is present
+                    if not report_panel.query(Markdown):
+                        for widget in report_panel.children:
+                            widget.remove()
+                        report_panel.mount(Markdown(id="report"))
+
+                    self.query_one("#report", Markdown).update(content)
         except Exception:
             pass

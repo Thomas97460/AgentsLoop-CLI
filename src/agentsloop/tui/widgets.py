@@ -55,6 +55,81 @@ class LargeLogo(Static):
         return Align.center(framed_logo, vertical="middle")
 
 
+class LoadingLogo(Static):
+    """An animated version of the LargeLogo with a rotating progress border."""
+
+    def on_mount(self) -> None:
+        """Start the animation."""
+        self.frame = 0
+        self.set_interval(0.1, self.refresh)
+
+    def render(self) -> RenderableType:
+        """Render the logo with a rotating orange segment on the full border."""
+        self.frame += 1
+        # Replicate Home Logo style
+        agents_art = text2art("AGENTS", font="slant")
+        loop_art = text2art("LOOP", font="slant")
+        agents_lines = agents_art.splitlines()
+        loop_lines = loop_art.splitlines()
+
+        logo_lines = []
+        max_width = 0
+        for agents_line, loop_line in zip(agents_lines, loop_lines, strict=True):
+            line = Text()
+            line.append(agents_line, style="bold $foreground")
+            line.append(loop_line, style="bold #f0a35a")
+            logo_lines.append(line)
+            max_width = max(max_width, line.cell_len)
+
+        # Add "is working..." centered below
+        working_text = "is working..."
+        working_line = Text(working_text.center(max_width), style="dim $foreground")
+        logo_lines.append(working_line)
+        max_width = max(max_width, working_line.cell_len)
+
+        # Full border for animation
+        # Top: max_width+2, Right: height, Bottom: max_width+2, Left: height
+        height = len(logo_lines)
+        border = (
+            "╔"
+            + "═" * (max_width + 2)
+            + "╗"
+            + "║" * height
+            + "╝"
+            + "═" * (max_width + 2)
+            + "╚"
+            + "║" * height
+        )
+        total_len = len(border)
+        segment_len = 8
+
+        def get_style(i: int) -> str:
+            # Shifted window
+            if ((self.frame % total_len) <= i < (self.frame % total_len) + segment_len) or (
+                (self.frame % total_len) + segment_len > total_len
+                and (self.frame % total_len + segment_len) % total_len > i
+            ):
+                return "bold #f0a35a"
+            return "$primary"
+
+        framed_logo = Text()
+        # Top
+        for i, char in enumerate("╔" + "═" * (max_width + 2) + "╗"):
+            framed_logo.append(char, style=get_style(i))
+        framed_logo.append("\n")
+
+        # Sides + Content
+        for r, line in enumerate(logo_lines):
+            framed_logo.append("║ ", style=get_style(max_width + 3 + height - r))
+            framed_logo.append(line)
+            framed_logo.append(" ║\n", style=get_style(max_width + 3 + r))
+
+        # Bottom
+        for i, char in enumerate("╚" + "═" * (max_width + 2) + "╝"):
+            framed_logo.append(char, style=get_style(max_width + 3 + height + i))
+        return Align.center(framed_logo, vertical="middle")
+
+
 def status_text(status: str) -> Text:
     """Return colored status text."""
     colors = {
@@ -81,7 +156,7 @@ def populate_runs_table(table: DataTable[str], runs: list[RunSummary]) -> None:
             run.task_id[:8],
             status.markup,
             str(run.loop_count),
-            run.updated_at.split("T")[0],  # Simpler date
+            run.updated_at.split("T")[0] + " " + run.updated_at.split("T")[1][:5],  # Date and time
             run.request_preview.replace("\n", " ")[:60],
             key=run.task_id,
         )
@@ -122,10 +197,10 @@ def populate_nodes_table(table: DataTable[str], nodes: list[NodeRun]) -> None:
         )
 
 
-def node_report_markdown(node: NodeRun) -> str:
-    """Render a node report as Markdown."""
+def node_report_markdown(node: NodeRun) -> str | None:
+    """Render a node report as Markdown. Returns None if loading."""
     if not node.report_path.exists():
-        return f"# {node.role.upper()} {node.iteration:02d}\n\n_Report pending._"
+        return None
 
     try:
         report = node.report_path.read_text(encoding="utf-8")
