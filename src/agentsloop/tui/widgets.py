@@ -96,16 +96,27 @@ def populate_events(log: RichLog, events: list[WorkflowEvent]) -> None:
 
 
 def populate_nodes_table(table: DataTable[str], nodes: list[NodeRun]) -> None:
-    """Fill a node table with execution history."""
+    """Fill a node table with execution history grouped by iteration."""
     table.clear(columns=True)
-    table.add_column("ITER")
     table.add_column("NODE")
     table.add_column("STATUS")
+
+    last_iteration = -1
     for node in nodes:
+        if node.iteration != last_iteration:
+            # Add a separator row for each iteration
+            iter_label = f"[bold $primary on $surface] ITERATION {node.iteration:02d} [/]"
+            # Fill the row with the separator
+            table.add_row(
+                iter_label,
+                "",
+                key=f"sep:{node.iteration}",
+            )
+            last_iteration = node.iteration
+
         status = status_text(node.status)
         table.add_row(
-            f"{node.iteration:02d}",
-            node.role.upper(),
+            f"  {node.role.upper()}",
             status.markup,
             key=f"{node.role}:{node.iteration}",
         )

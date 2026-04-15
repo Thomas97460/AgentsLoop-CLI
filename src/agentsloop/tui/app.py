@@ -11,6 +11,7 @@ from textual.theme import Theme
 
 from agentsloop.paths import runs_root
 from agentsloop.project_config import ProjectContext
+from agentsloop.runtime.git_runtime import discover_ssh_key_path
 from agentsloop.storage.json_store import RunStore
 from agentsloop.tui.screens import LoadingScreen
 from agentsloop.tui.theme import APP_CSS
@@ -56,10 +57,19 @@ class WorkflowApp(App[None]):
     ) -> None:
         super().__init__()
         self.store = RunStore(runs_dir or runs_root())
-        self.project_context = project_context or ProjectContext(
-            repo_root=Path.cwd(),
-            base_branch="main",
-        )
+        if project_context is None:
+            default_key = discover_ssh_key_path()
+            if not default_key:
+                # This should normally be handled by cli.py,
+                # but we need a valid Path to instantiate ProjectContext
+                default_key = Path("~/.ssh/id_rsa").expanduser()
+
+            project_context = ProjectContext(
+                repo_root=Path.cwd(),
+                base_branch="main",
+                ssh_key_path=default_key,
+            )
+        self.project_context = project_context
 
     def on_mount(self) -> None:
         """Register themes and open the initial screen."""

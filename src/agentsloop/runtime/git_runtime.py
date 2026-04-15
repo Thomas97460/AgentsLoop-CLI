@@ -31,19 +31,44 @@ def load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def env_with_agent_ssh(repo_root: Path, base_env: dict[str, str] | None = None) -> dict[str, str]:
+def discover_ssh_key_path() -> Path | None:
+    """Find a reasonable default SSH key path in ~/.ssh/."""
+    ssh_dir = Path("~/.ssh").expanduser()
+    if not ssh_dir.exists():
+        return None
+    # Prioritize ed25519 then rsa
+    for name in ["id_ed25519", "id_rsa", "id_ecdsa"]:
+        key = ssh_dir / name
+        if key.exists():
+            return key
+    # Fallback to any id_* file that doesn't end in .pub
+    for key in ssh_dir.glob("id_*"):
+        if key.suffix != ".pub" and key.is_file():
+            return key
+    return None
+
+
+def env_with_agent_ssh(
+    repo_root: Path, base_env: dict[str, str] | None = None, ssh_key_path: Path | None = None
+) -> dict[str, str]:
     """Return an environment using AGENTS_* SSH settings with non-interactive defaults."""
     env = dict(os.environ if base_env is None else base_env)
-    env.update({key: value for key, value in load_env_file(repo_root / ".env").items()})
+    # repo_root is used to find .env file
+    if repo_root.exists() and repo_root.is_dir():
+        env.update({key: value for key, value in load_env_file(repo_root / ".env").items()})
 
     # Force non-interactive git
     env["GIT_TERMINAL_PROMPT"] = "0"
 
-    key_path = env.get("AGENTS_GIT_SSH_KEY_PATH")
+    key_path = str(ssh_key_path) if ssh_key_path else env.get("AGENTS_GIT_SSH_KEY_PATH")
     if not key_path:
-        # Still force non-interactive SSH for the default user environment
-        env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-        return env
+        default_key = discover_ssh_key_path()
+        if not default_key:
+            raise EnvironmentError(
+                "Git SSH key path is mandatory. Please set AGENTS_GIT_SSH_KEY_PATH "
+                "or ensure a default key exists in ~/.ssh/id_*"
+            )
+        key_path = str(default_key)
 
     strict = env.get("AGENTS_GIT_SSH_STRICT_HOST_KEY_CHECKING") or "accept-new"
     command_parts = [
@@ -67,7 +92,7 @@ def env_with_agent_ssh(repo_root: Path, base_env: dict[str, str] | None = None) 
 
 
 def run_git(
-    args: list[str], cwd: Path | None, env: dict[str, str]
+    args: list[str], cwd: Path | None, env: dict[str, str], check: bool = False
 ) -> subprocess.CompletedProcess[str]:
     """Run one git command and return the completed process."""
     return subprocess.run(
@@ -76,7 +101,7 @@ def run_git(
         env=env,
         text=True,
         capture_output=True,
-        check=False,
+        check=check,
     )
 
 
@@ -141,17 +166,24 @@ def clone_for_agent(
         ["ls-remote", "--exit-code", "--heads", "origin", working_branch], repo_path, env
     )
     if remote.returncode == 0:
-        fetch = run_git(
+        # Branch exists on remote, fetch and track it
+        run_git(
             ["fetch", "origin", f"{working_branch}:refs/remotes/origin/{working_branch}"],
             repo_path,
             env,
+            check=True,
         )
-        if fetch.returncode != 0:
-            raise RuntimeError(f"git fetch failed:\n{fetch.stderr}")
-        checkout = run_git(
-            ["checkout", "-B", working_branch, f"origin/{working_branch}"], repo_path, env
+        run_git(
+            ["checkout", "-B", working_branch, f"origin/{working_branch}"],
+            repo_path,
+            env,
+            check=True,
         )
     else:
-        checkout = run_git(["checkout", "-B", working_branch, base_branch], repo_path, env)
-    if checkout.returncode != 0:
-        raise RuntimeError(f"git checkout failed:\n{checkout.stderr}")
+        # Branch is new, create it from base
+        run_git(
+            ["checkout", "-B", working_branch, base_branch],
+            repo_path,
+            env,
+            check=True,
+        )

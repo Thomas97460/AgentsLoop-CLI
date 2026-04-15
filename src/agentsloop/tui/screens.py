@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import ClassVar, cast
 
 from textual import on
@@ -65,27 +66,11 @@ class LoadingScreen(Screen[None]):
                 yield Button("Quit", variant="error", id="quit")
 
     def on_mount(self) -> None:
-        """Run the access check on mount."""
-        self.run_worker(self._check_access, thread=True)
-
-    def _check_access(self) -> None:
-        """Verify git write access and redirect."""
-        try:
-            env = env_with_agent_ssh(self.project_context.repo_root)
-            verify_git_write_access(self.project_context.repo_root, env)
-
-            # Success, move to the next screen
-            if self.project_context.configured:
-                self.app.call_from_thread(
-                    self.app.switch_screen, HomeScreen(self.store, self.project_context)
-                )
-            else:
-                self.app.call_from_thread(
-                    self.app.switch_screen, ProjectSetupScreen(self.store, self.project_context)
-                )
-
-        except Exception as exc:
-            self.app.call_from_thread(self._handle_error, str(exc))
+        """Skip verification and move to next screen."""
+        if self.project_context.configured:
+            self.app.switch_screen(HomeScreen(self.store, self.project_context))
+        else:
+            self.app.switch_screen(ProjectSetupScreen(self.store, self.project_context))
 
     def _handle_error(self, message: str) -> None:
         """Show error state in the UI."""
@@ -137,6 +122,8 @@ class HomeScreen(Screen[None]):
         self.app.sub_title = str(self.project_context.repo_root)
         self.action_refresh()
         self.query_one("#runs", DataTable).focus()
+        # Auto-refresh home screen every 3 seconds to update statuses
+        self.set_interval(3.0, self.action_refresh)
 
     def action_refresh(self) -> None:
         """Refresh the run table."""
@@ -181,8 +168,14 @@ class ProjectSetupScreen(Screen[None]):
                     placeholder=DEFAULT_VALIDATION_COMMAND,
                     id="validation_command",
                 )
+                yield Label("Git SSH Key Path", classes="field-label")
+                yield Input(
+                    value=str(self.project_context.ssh_key_path),
+                    placeholder="~/.ssh/id_ed25519",
+                    id="ssh_key_path",
+                )
                 yield Static(
-                    "This command runs in a fresh clone of the developer branch.",
+                    "This key must have push access to the remote repository.",
                     classes="hint",
                 )
             with Horizontal(classes="actions"):
@@ -198,13 +191,15 @@ class ProjectSetupScreen(Screen[None]):
     def save(self) -> None:
         """Persist setup and open the home screen."""
         command = self.query_one("#validation_command", Input).value.strip()
+        ssh_key = Path(self.query_one("#ssh_key_path", Input).value.strip()).expanduser()
+
         if not command:
             self.notify("Validation command is required", severity="error")
             return
 
         # Verify git access before saving
         try:
-            env = env_with_agent_ssh(self.project_context.repo_root)
+            env = env_with_agent_ssh(self.project_context.repo_root, ssh_key_path=ssh_key)
             verify_git_write_access(self.project_context.repo_root, env)
         except Exception as exc:
             self.notify(
@@ -215,7 +210,7 @@ class ProjectSetupScreen(Screen[None]):
             )
             return
 
-        self.project_context.save_validation_command(command)
+        self.project_context.save_config(command, ssh_key)
         self.app.switch_screen(HomeScreen(self.store, self.project_context))
 
     @on(Button.Pressed, "#quit")
@@ -299,10 +294,17 @@ class LaunchScreen(Screen[None]):
         if not validation_command:
             self.notify("Validation command is required", severity="error")
             return
-        self.project_context.save_validation_command(validation_command)
+        repo_url = self.project_context.remote_url or str(self.project_context.repo_root)
+        if not self.project_context.remote_url:
+            self.notify(
+                "No 'origin' remote found. Work will only be pushed to your local repository.",
+                severity="warning",
+            )
+
         config = RuntimeConfig(
             model=model,
-            repo_url=str(self.project_context.repo_root),
+            repo_url=repo_url,
+            ssh_key_path=self.project_context.ssh_key_path,
             base_branch=(
                 self.query_one("#base_branch", Input).value.strip()
                 or self.project_context.base_branch
@@ -362,9 +364,10 @@ class WorkflowScreen(Screen[None]):
                 with Vertical(id="workflow-nodes-panel"):
                     yield Label("NODES", classes="table-title")
                     yield DataTable[str](id="nodes", cursor_type="row")
-                with Vertical(id="workflow-report-panel"):
+                with Vertical(id="workflow-side-panel"):
                     yield Label("NODE REPORT", classes="table-title")
-                    yield Markdown(id="report")
+                    with Vertical(id="workflow-report-panel"):
+                        yield Markdown(id="report")
 
             with Vertical(id="workflow-bottom"):
                 yield Label("ACTIVITY LOG", classes="table-title")

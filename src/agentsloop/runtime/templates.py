@@ -37,3 +37,9 @@ def parse_approval_status(report_md: str) -> str:
     """Extract a CTO decision, defaulting to ``continue``."""
     match = re.search(r"(?im)^approval_status:\s*(done|continue)\s*$", report_md)
     return match.group(1).lower() if match else "continue"
+
+
+def parse_developer_branch(report_md: str) -> str | None:
+    """Extract a developer branch name, if provided."""
+    match = re.search(r"(?im)^developer_branch:\s*([a-z0-9/-]+)\s*$", report_md)
+    return match.group(1) if match else None

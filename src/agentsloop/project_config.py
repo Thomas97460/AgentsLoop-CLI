@@ -17,6 +17,7 @@ class ProjectConfig(BaseModel):
     """Settings collected once for a repository."""
 
     validation_command: str = Field(default=DEFAULT_VALIDATION_COMMAND, min_length=1)
+    ssh_key_path: Path
 
 
 class ProjectConfigStore:
@@ -50,16 +51,25 @@ class ProjectContext:
 
     repo_root: Path
     base_branch: str
+    ssh_key_path: Path
+    remote_url: str | None = None
     validation_command: str = DEFAULT_VALIDATION_COMMAND
     config_store: ProjectConfigStore | None = None
     configured: bool = True
 
-    def save_validation_command(self, command: str) -> None:
-        """Persist and apply the validation command."""
-        self.validation_command = command
+    def save_config(self, validation_command: str, ssh_key_path: Path) -> None:
+        """Persist and apply project settings."""
+        self.validation_command = validation_command
+        self.ssh_key_path = ssh_key_path
         self.configured = True
         if self.config_store is not None:
-            self.config_store.save(ProjectConfig(validation_command=command))
+            self.config_store.save(
+                ProjectConfig(validation_command=validation_command, ssh_key_path=ssh_key_path)
+            )
+
+    def save_validation_command(self, command: str) -> None:
+        """Persist and apply the validation command."""
+        self.save_config(command, self.ssh_key_path)
 
 
 def default_config_home() -> Path:

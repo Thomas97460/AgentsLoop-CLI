@@ -48,7 +48,7 @@ def run_workflow(
         runs_dir=runs_dir,
     )
     store = RunStore(runs_dir or runs_root(), event_sink=event_sink)
-    env = env_with_agent_ssh(Path(config.repo_url))
+    env = env_with_agent_ssh(Path(config.repo_url), ssh_key_path=config.ssh_key_path)
     store.prepare(state)
     store.event(
         state,
@@ -59,12 +59,19 @@ def run_workflow(
     )
     try:
         while True:
+            # Nodes might change status to success/stopped, but if we are starting a cycle,
+            # we are definitely running.
+            state.status = "running"
+            store.save_state(state)
+
             run_cto(state, prompts_root(), env, store)
+            # parse_decision inside run_cto already updated state.status and state.approval_status
             if state.approval_status == "done":
                 break
+
             run_developer(state, prompts_root(), env, store)
             run_validation(state, env, store)
-        state.status = "stopped" if state.stopped_by_limit else "success"
+
         store.save_state(state)
         store.write_summary(state)
         store.event(

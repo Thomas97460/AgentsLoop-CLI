@@ -40,6 +40,7 @@ def config(validation_command: str = DEFAULT_VALIDATION_COMMAND) -> RuntimeConfi
     """Build a minimal Gemini runtime config."""
     return RuntimeConfig(
         repo_url="git@example.com:x/y.git",
+        ssh_key_path=Path("~/.ssh/id_rsa").expanduser(),
         base_branch="main",
         loop_limit=2,
         validation_command=validation_command,
@@ -110,10 +111,11 @@ def test_project_config_store_persists_validation_command(tmp_path: Path) -> Non
     repo = tmp_path / "repo"
     repo.mkdir()
     store = ProjectConfigStore(repo, tmp_path / "config")
-    store.save(ProjectConfig(validation_command="npm test"))
+    store.save(ProjectConfig(validation_command="npm test", ssh_key_path=tmp_path / "id_rsa"))
     loaded = store.load()
     assert loaded is not None
     assert loaded.validation_command == "npm test"
+    assert loaded.ssh_key_path == tmp_path / "id_rsa"
 
 
 def test_store_writes_node_artifacts_and_history(tmp_path: Path) -> None:
@@ -192,8 +194,21 @@ def test_orchestrator_runs_with_stubbed_agents_and_validation(
 
     def fake_run_agent(spec: AgentRunSpec, task_id: str) -> ProviderResult:
         del task_id
-        report = cto_reports.pop(0) if spec.role == "cto" else "# Summary\nDone"
+        if spec.role == "cto":
+            report = cto_reports.pop(0)
+            # Ensure the branch field is present if needed for parsing
+            if "developer_branch:" not in report:
+                report = report.replace(
+                    "approval_status: continue",
+                    f"approval_status: continue\ndeveloper_branch: {spec.working_branch}",
+                ).replace(
+                    "approval_status: done",
+                    f"approval_status: done\ndeveloper_branch: {spec.working_branch}",
+                )
+        else:
+            report = "# Summary\nDone"
         return ProviderResult(
+
             provider="gemini",
             role=spec.role,
             model=spec.model,
@@ -270,11 +285,51 @@ def test_cli_requires_git_repo(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Git repository" in result.output
 
 
+def test_cli_requires_ssh_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Reject launches without an SSH key path."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr("agentsloop.cli.find_git_root", lambda _cwd: repo)
+    monkeypatch.setattr("agentsloop.cli.discover_ssh_key_path", lambda: None)
+    runner = CliRunner()
+    result = runner.invoke(cli, [])
+    assert result.exit_code == 1
+    assert "Git SSH key path is mandatory" in result.output
+
+
+def test_cli_accepts_ssh_key_option(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Accept the --ssh-key option and skip discovery."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    ssh_key = tmp_path / "manual_key"
+    ssh_key.touch()
+
+    # Mock discover to return None to ensure we rely on the option
+    monkeypatch.setattr("agentsloop.cli.find_git_root", lambda _cwd: repo)
+    monkeypatch.setattr("agentsloop.cli.discover_ssh_key_path", lambda: None)
+    monkeypatch.setattr("agentsloop.cli.current_git_branch", lambda _repo: "main")
+    monkeypatch.setattr("agentsloop.cli.get_git_remote_url", lambda _repo: "url")
+
+    # Mock WorkflowApp to avoid launching the TUI
+    with patch("agentsloop.cli.WorkflowApp") as mock_app:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--ssh-key", str(ssh_key)])
+        assert result.exit_code == 0
+        mock_app.assert_called_once()
+        context = mock_app.call_args[0][1]
+        assert context.ssh_key_path == ssh_key
+
+
 def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None:
     """Instantiate the Textual shell and verify the model selector."""
 
     async def run_app() -> None:
-        app = WorkflowApp(tmp_path, ProjectContext(repo_root=tmp_path, base_branch="main"))
+        app = WorkflowApp(
+            tmp_path,
+            ProjectContext(
+                repo_root=tmp_path, base_branch="main", ssh_key_path=tmp_path / "id_rsa"
+            ),
+        )
         original_push_screen = app.push_screen
         with (
             patch("agentsloop.tui.app.LoadingScreen"),
@@ -310,6 +365,7 @@ def test_textual_app_collects_first_run_validation_command(tmp_path: Path) -> No
         context = ProjectContext(
             repo_root=tmp_path,
             base_branch="main",
+            ssh_key_path=tmp_path / "id_rsa",
             config_store=store,
             configured=False,
         )

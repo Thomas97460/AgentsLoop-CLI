@@ -62,6 +62,7 @@ def spawn_workflow_process(
         run_dir=state.run_dir,
         log_path=worker_log_path,
         repo_url=config.repo_url,
+        ssh_key_path=config.ssh_key_path,
     )
     store.event(
         state,
@@ -85,6 +86,7 @@ def _spawn_worker(
     run_dir: Path,
     log_path: Path,
     repo_url: str,
+    ssh_key_path: Path,
 ) -> subprocess.Popen[bytes]:
     """Spawn the detached Python worker process with non-interactive agent SSH."""
     command = [
@@ -94,7 +96,7 @@ def _spawn_worker(
         "--request-file",
         str(request_path),
     ]
-    env = env_with_agent_ssh(Path(repo_url))
+    env = env_with_agent_ssh(Path(repo_url), ssh_key_path=ssh_key_path)
     env["AGENTSLOOP_REQUEST_FILE"] = str(request_path)
     with log_path.open("a", encoding="utf-8") as log_handle:
         return subprocess.Popen(

@@ -11,6 +11,7 @@ from agentsloop.runtime.git_runtime import run_git
 from agentsloop.runtime.templates import (
     extract_section,
     parse_approval_status,
+    parse_developer_branch,
     render_template,
     slugify,
 )
@@ -63,6 +64,11 @@ def build_prompt(state: WorkflowState, prompts_dir: Path) -> str:
 def parse_decision(state: WorkflowState, report_md: str) -> None:
     """Update state from the CTO Markdown report."""
     approval_status = parse_approval_status(report_md)
+    # Update branch name if chosen by CTO in first iteration
+    chosen_branch = parse_developer_branch(report_md)
+    if chosen_branch and state.loop_count == 0:
+        state.developer_branch = chosen_branch
+
     developer_task_md = extract_section(report_md, "Developer Task") or "_none_"
     human_response_md = extract_section(report_md, "Human Response") or "_none_"
     technical_summary_md = extract_section(report_md, "Technical Summary") or "_none_"
@@ -81,6 +87,15 @@ def parse_decision(state: WorkflowState, report_md: str) -> None:
         technical_summary_md = (
             f"Loop guard triggered at {state.loop_count}/{state.config.loop_limit} cycles."
         )
+    
+    # If the CTO said done, it's a success regardless of the limit
+    if approval_status == "done" and not technical_summary_md.startswith("Loop guard triggered"):
+        state.status = "success"
+    elif stopped_by_limit:
+        state.status = "stopped"
+    else:
+        state.status = "running"
+
     state.approval_status = cast(Literal["continue", "done"], approval_status)
     state.stopped_by_limit = stopped_by_limit
     state.reports["cto"] = report_md
@@ -129,19 +144,28 @@ def run_cto(
         state.task_id,
     )
 
-    # Ensure the developer branch is pushed to origin during the first CTO iteration.
-    # This fulfills the CTO prompt mandate and ensures the branch exists on remote.
-    if state.loop_count == 0:
-        run_git(
-            ["push", "-u", "origin", state.developer_branch],
-            Path(result.repo_path),
-            env,
-        )
-
     report_md = result.report_md or "# Controller\napproval_status: continue\n"
     store.write_node_result(state, node_run, result.model_dump(mode="json", exclude={"report_md"}))
     store.write_node_report(state, node_run, report_md)
     parse_decision(state, report_md)
+
+    # Ensure the developer branch is pushed to origin during the first CTO iteration.
+    # This fulfills the CTO prompt mandate and ensures the branch exists on remote.
+    if state.loop_count == 0:
+        # In case the CTO chose a different branch name in the report, ensure it's checked out.
+        run_git(
+            ["checkout", "-B", state.developer_branch],
+            Path(result.repo_path),
+            env,
+            check=True,
+        )
+        run_git(
+            ["push", "-u", "origin", state.developer_branch],
+            Path(result.repo_path),
+            env,
+            check=True,
+        )
+
     store.finish_node(
         state,
         node_run,

@@ -9,7 +9,7 @@ Screen {
 
 .page {
     height: 100%;
-    padding: 0 4 1 4;
+    padding: 1 4 1 4;
 }
 
 /* Header & Home Logo */
@@ -136,20 +136,26 @@ TextArea#request {
 #workflow-nodes-panel {
     width: 2fr;
     height: 100%;
-    margin-right: 1;
+    margin-right: 2;
+}
+
+#workflow-side-panel {
+    width: 3fr;
+    height: 100%;
 }
 
 #workflow-report-panel {
-    width: 3fr;
-    height: 100%;
+    height: 1fr;
+    width: 100%;
     background: $panel;
     border: round $primary 40%;
-    padding: 1 1;
+    padding: 1 2;
 }
 
 #report {
-    height: 1fr;
+    height: 100%;
     width: 100%;
+    overflow-y: scroll;
     scrollbar-gutter: stable;
 }
 

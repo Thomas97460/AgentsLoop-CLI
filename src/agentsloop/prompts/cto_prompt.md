@@ -91,13 +91,15 @@ You must decide between:
 
 # Validation / Tests
 {{validation_summary}}
-
 # Expected Output (STRICT FORMAT)
 
 # Controller
 approval_status: done | continue
+developer_branch: <branch_name>
 
 # Developer Task
+...
+
 Write a precise, minimal, and actionable task:
 - reference files when possible
 - describe expected result
