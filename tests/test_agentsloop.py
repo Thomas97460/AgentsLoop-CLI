@@ -33,7 +33,7 @@ from agentsloop.runtime.templates import parse_approval_status, render_template,
 from agentsloop.runtime.workflow_launcher import spawn_workflow_process
 from agentsloop.storage.json_store import RunStore
 from agentsloop.tui.app import WorkflowApp
-from agentsloop.tui.screens import HomeScreen, ProjectSetupScreen
+from agentsloop.tui.screens import HomeScreen, ProjectSetupScreen, SSHKeySelectionScreen
 
 
 def config(validation_command: str = DEFAULT_VALIDATION_COMMAND) -> RuntimeConfig:
@@ -353,6 +353,69 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
                 validation_command = app.screen.query_one("#validation_command", Input)
                 assert model_select.value == DEFAULT_GEMINI_MODEL
                 assert validation_command.value == DEFAULT_VALIDATION_COMMAND
+
+    asyncio.run(run_app())
+
+
+def test_textual_app_ssh_key_selection_flow(tmp_path: Path) -> None:
+    """Verify the SSH key selection screen correctly updates the context."""
+
+    async def run_app() -> None:
+        store = ProjectConfigStore(tmp_path, tmp_path / "config")
+        context = ProjectContext(
+            repo_root=tmp_path,
+            base_branch="main",
+            ssh_key_path=tmp_path / "old_key",
+            config_store=store,
+            configured=True,
+        )
+        app = WorkflowApp(tmp_path / "runs", context)
+        new_key = tmp_path / "new_key"
+        new_key.touch()
+        original_push_screen = app.push_screen
+
+        worker_task = None
+
+        def fake_run_worker(coro, **kwargs):
+            nonlocal worker_task
+            worker_task = asyncio.create_task(coro)
+            return None
+
+        with (
+            patch("agentsloop.tui.app.WarningScreen"),
+            patch("agentsloop.tui.screens.verify_git_write_access"),
+            patch("asyncio.to_thread") as mock_to_thread,
+            patch.object(WorkflowApp, "push_screen") as mock_push,
+        ):
+            mock_to_thread.return_value = None
+            mock_push.side_effect = lambda screen, **kwargs: (
+                original_push_screen(screen, **kwargs)
+                if isinstance(screen, (Screen, str))
+                else None
+            )
+
+            async with app.run_test() as pilot:
+                # Manually push the SSH selection screen
+                app.push_screen(SSHKeySelectionScreen(app.store, context))
+                await pilot.pause()
+
+                assert isinstance(app.screen, SSHKeySelectionScreen)
+                # Mock run_worker on the screen instance
+                app.screen.run_worker = fake_run_worker
+
+                custom_input = app.screen.query_one("#ssh_key_custom", Input)
+                custom_input.value = str(new_key)
+                
+                app.screen.test_and_save()
+
+                # Wait for the worker task if it exists
+                if worker_task:
+                    await asyncio.wait_for(worker_task, timeout=2.0)
+                await pilot.pause()
+                
+                assert context.ssh_key_path == new_key
+                # Also verify it saved to store since configured=True
+                assert store.load().ssh_key_path == new_key
 
     asyncio.run(run_app())
 

@@ -35,7 +35,11 @@ from agentsloop.domain.models import (
     WorkflowState,
 )
 from agentsloop.project_config import ProjectContext
-from agentsloop.runtime.git_runtime import env_with_agent_ssh, verify_git_write_access
+from agentsloop.runtime.git_runtime import (
+    env_with_agent_ssh,
+    list_available_ssh_keys,
+    verify_git_write_access,
+)
 from agentsloop.runtime.workflow_launcher import spawn_workflow_process
 from agentsloop.storage.json_store import RunStore
 from agentsloop.tui.widgets import (
@@ -73,8 +77,130 @@ class WarningScreen(Screen[None]):
 
     @on(Button.Pressed, "#accept")
     def accept(self) -> None:
-        """Move to the loading screen."""
+        """Move to the SSH key selection screen."""
+        self.app.switch_screen(SSHKeySelectionScreen(self.store, self.project_context))
+
+    @on(Button.Pressed, "#quit")
+    def quit_app(self) -> None:
+        """Exit the application."""
+        self.app.exit()
+
+
+class SSHKeySelectionScreen(Screen[None]):
+    """Choose the Git SSH key before entering the application."""
+
+    def __init__(self, store: RunStore, project_context: ProjectContext) -> None:
+        super().__init__()
+        self.store = store
+        self.project_context = project_context
+        self.available_keys = list_available_ssh_keys()
+
+    def compose(self) -> ComposeResult:
+        """Compose the SSH key selection view."""
+        with Vertical(classes="page"):
+            with Vertical(classes="panel"):
+                yield Label("GIT SSH KEY SELECTION", classes="table-title")
+                yield Static(
+                    "Select the SSH key to be used for Git operations. "
+                    "This key must have write access to the repository.",
+                    classes="hint",
+                )
+                
+                options = [(str(key), str(key)) for key in self.available_keys]
+                default_value = str(self.project_context.ssh_key_path)
+                
+                # Ensure the current key is in options even if not in common discovery
+                if default_value not in [opt[1] for opt in options]:
+                    options.insert(0, (default_value, default_value))
+
+                yield Select(
+                    options,
+                    value=default_value,
+                    id="ssh_key_select",
+                    prompt="Choose an SSH key",
+                )
+                
+                yield Label("OR ENTER CUSTOM PATH", classes="field-label")
+                yield Input(
+                    value=default_value,
+                    placeholder="~/.ssh/your_key",
+                    id="ssh_key_custom",
+                )
+                
+                yield Static("", id="test-status", classes="hint")
+
+            with Horizontal(classes="actions centered-actions"):
+                yield Button("Test Access & Continue", variant="success", id="test_and_save")
+                yield Button("Back", id="back")
+                yield Button("Quit", variant="error", id="quit")
+
+    @on(Select.Changed, "#ssh_key_select")
+    def on_key_selected(self, event: Select.Changed) -> None:
+        """Update the custom input field when a selection is made."""
+        if event.value:
+            self.query_one("#ssh_key_custom", Input).value = str(event.value)
+
+    @on(Input.Submitted, "#ssh_key_custom")
+    def on_submit(self) -> None:
+        """Handle enter key in custom input."""
+        self.test_and_save()
+
+    @on(Button.Pressed, "#test_and_save")
+    def test_and_save(self) -> None:
+        """Verify the selected key and proceed."""
+        ssh_key_str = self.query_one("#ssh_key_custom", Input).value.strip()
+        if not ssh_key_str:
+            self.notify("SSH key path is required", severity="error")
+            return
+            
+        ssh_key = Path(ssh_key_str).expanduser()
+        if not ssh_key.exists():
+            self.notify(f"SSH key not found: {ssh_key}", severity="error")
+            return
+
+        self.query_one("#test-status", Static).update("Testing Git write access...")
+        self.run_worker(self._verify_and_proceed(ssh_key))
+
+    async def _verify_and_proceed(self, ssh_key: Path) -> None:
+        """Background worker to verify git access."""
+        try:
+            # env_with_agent_ssh and verify_git_write_access are blocking
+            # We wrap them to keep the UI alive.
+            import asyncio
+
+            def check():
+                env = env_with_agent_ssh(self.project_context.repo_root, ssh_key_path=ssh_key)
+                verify_git_write_access(self.project_context.repo_root, env)
+
+            await asyncio.to_thread(check)
+            
+            # Update the context
+            self.project_context.ssh_key_path = ssh_key
+            # If already configured, we might want to update the stored config too
+            if self.project_context.configured:
+                self.project_context.save_config(
+                    self.project_context.validation_command, ssh_key
+                )
+
+            # Success, move to the next screen
+            self._finish_selection()
+            
+        except Exception as exc:
+            self._handle_test_error(str(exc))
+
+    def _finish_selection(self) -> None:
+        """Switch to LoadingScreen after successful verification."""
         self.app.switch_screen(LoadingScreen(self.store, self.project_context))
+
+    def _handle_test_error(self, message: str) -> None:
+        """Show verification error."""
+        self.query_one("#test-status", Static).update(f"[bold red]Failed: {message}[/]")
+        self.notify("Git access verification failed", severity="error")
+
+    @on(Button.Pressed, "#back")
+    def back(self) -> None:
+        """Return to the warning screen."""
+        self.app.switch_screen(WarningScreen(self.store, self.project_context))
 
     @on(Button.Pressed, "#quit")
     def quit_app(self) -> None:
@@ -203,14 +329,8 @@ class ProjectSetupScreen(Screen[None]):
                     placeholder=DEFAULT_VALIDATION_COMMAND,
                     id="validation_command",
                 )
-                yield Label("Git SSH Key Path", classes="field-label")
-                yield Input(
-                    value=str(self.project_context.ssh_key_path),
-                    placeholder="~/.ssh/id_ed25519",
-                    id="ssh_key_path",
-                )
                 yield Static(
-                    "This key must have push access to the remote repository.",
+                    "This command runs in a fresh clone of the developer branch.",
                     classes="hint",
                 )
             with Horizontal(classes="actions"):
@@ -226,26 +346,12 @@ class ProjectSetupScreen(Screen[None]):
     def save(self) -> None:
         """Persist setup and open the home screen."""
         command = self.query_one("#validation_command", Input).value.strip()
-        ssh_key = Path(self.query_one("#ssh_key_path", Input).value.strip()).expanduser()
 
         if not command:
             self.notify("Validation command is required", severity="error")
             return
 
-        # Verify git access before saving
-        try:
-            env = env_with_agent_ssh(self.project_context.repo_root, ssh_key_path=ssh_key)
-            verify_git_write_access(self.project_context.repo_root, env)
-        except Exception as exc:
-            self.notify(
-                f"Cannot save: {exc!s}",
-                title="Git Access Required",
-                severity="error",
-                timeout=10,
-            )
-            return
-
-        self.project_context.save_config(command, ssh_key)
+        self.project_context.save_validation_command(command)
         self.app.switch_screen(HomeScreen(self.store, self.project_context))
 
     @on(Button.Pressed, "#quit")

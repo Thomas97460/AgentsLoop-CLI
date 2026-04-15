@@ -31,6 +31,24 @@ def load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def list_available_ssh_keys() -> list[Path]:
+    """List all potential private SSH keys in ~/.ssh/."""
+    ssh_dir = Path("~/.ssh").expanduser()
+    if not ssh_dir.exists():
+        return []
+    keys: list[Path] = []
+    # Common names
+    for name in ["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"]:
+        key = ssh_dir / name
+        if key.exists() and key.is_file():
+            keys.append(key)
+    # Any other id_* that is not a public key
+    for key in ssh_dir.glob("id_*"):
+        if key.suffix != ".pub" and key.is_file() and key not in keys:
+            keys.append(key)
+    return sorted(keys)
+
+
 def discover_ssh_key_path() -> Path | None:
     """Find a reasonable default SSH key path in ~/.ssh/."""
     ssh_dir = Path("~/.ssh").expanduser()
