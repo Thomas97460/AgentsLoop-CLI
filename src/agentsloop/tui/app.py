@@ -13,7 +13,7 @@ from agentsloop.paths import runs_root
 from agentsloop.project_config import ProjectContext
 from agentsloop.runtime.git_runtime import discover_ssh_key_path
 from agentsloop.storage.json_store import RunStore
-from agentsloop.tui.screens import LoadingScreen, WarningScreen
+from agentsloop.tui.screens import WarningScreen
 from agentsloop.tui.theme import APP_CSS
 
 # Soft themes definitions

@@ -87,7 +87,7 @@ def parse_decision(state: WorkflowState, report_md: str) -> None:
         technical_summary_md = (
             f"Loop guard triggered at {state.loop_count}/{state.config.loop_limit} cycles."
         )
-    
+
     # If the CTO said done, it's a success regardless of the limit
     if approval_status == "done" and not technical_summary_md.startswith("Loop guard triggered"):
         state.status = "success"
@@ -147,6 +147,17 @@ def run_cto(
     report_md = result.report_md or "# Controller\napproval_status: continue\n"
     store.write_node_result(state, node_run, result.model_dump(mode="json", exclude={"report_md"}))
     store.write_node_report(state, node_run, report_md)
+    if result.status == "error":
+        state.status = "error"
+        state.failure_message = f"CTO node failed with exit code {result.exit_code}"
+        store.finish_node(
+            state,
+            node_run,
+            status=result.status,
+            exit_code=result.exit_code,
+        )
+        store.save_state(state)
+        raise RuntimeError(state.failure_message)
     parse_decision(state, report_md)
 
     # Ensure the developer branch is pushed to origin during the first CTO iteration.

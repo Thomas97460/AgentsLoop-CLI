@@ -82,7 +82,7 @@ def env_with_agent_ssh(
     if not key_path:
         default_key = discover_ssh_key_path()
         if not default_key:
-            raise EnvironmentError(
+            raise OSError(
                 "Git SSH key path is mandatory. Please set AGENTS_GIT_SSH_KEY_PATH "
                 "or ensure a default key exists in ~/.ssh/id_*"
             )
@@ -117,11 +117,10 @@ def list_remote_branches(repo_path: Path, env: dict[str, str] | None = None) -> 
             repo_path,
             env,
             check=True,
-            capture_output=True,
         )
         branches: list[str] = []
-        for line in result.stdout.splitlines():
-            line = line.strip()
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
             # Skip HEAD pointer and empty lines
             if "->" in line or not line:
                 continue
@@ -141,7 +140,7 @@ def list_remote_branches(repo_path: Path, env: dict[str, str] | None = None) -> 
 
 
 def run_git(
-    args: list[str], cwd: Path | None, env: dict[str, str], check: bool = False
+    args: list[str], cwd: Path | None, env: dict[str, str] | None, check: bool = False
 ) -> subprocess.CompletedProcess[str]:
     """Run one git command and return the completed process."""
     return subprocess.run(

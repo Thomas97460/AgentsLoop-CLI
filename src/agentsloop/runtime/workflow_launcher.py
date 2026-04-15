@@ -64,6 +64,9 @@ def spawn_workflow_process(
         repo_url=config.repo_url,
         ssh_key_path=config.ssh_key_path,
     )
+    state.worker_pid = process.pid
+    state.worker_log_path = worker_log_path
+    store.save_state(state)
     store.event(
         state,
         "worker_spawned",
@@ -86,7 +89,7 @@ def _spawn_worker(
     run_dir: Path,
     log_path: Path,
     repo_url: str,
-    ssh_key_path: Path,
+    ssh_key_path: Path | None,
 ) -> subprocess.Popen[bytes]:
     """Spawn the detached Python worker process with non-interactive agent SSH."""
     command = [
