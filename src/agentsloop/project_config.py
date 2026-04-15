@@ -17,7 +17,7 @@ class ProjectConfig(BaseModel):
     """Settings collected once for a repository."""
 
     validation_command: str = Field(default=DEFAULT_VALIDATION_COMMAND, min_length=1)
-    ssh_key_path: Path
+    ssh_key_path: Path | None = None
 
 
 class ProjectConfigStore:
