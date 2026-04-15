@@ -47,7 +47,7 @@ class RuntimeConfig(BaseModel):
     provider: ProviderName = "gemini"
     model: GeminiModel = DEFAULT_GEMINI_MODEL
     repo_url: str
-    ssh_key_path: Path
+    ssh_key_path: Path | None = None
     base_branch: str = "main"
     loop_limit: int = Field(default=3, ge=1)
     validation_command: str = Field(default=DEFAULT_VALIDATION_COMMAND, min_length=1)
