@@ -59,6 +59,7 @@ class WorkflowApp(App[None]):
         self.project_context = project_context or ProjectContext(
             repo_root=Path.cwd(),
             base_branch="main",
+            ssh_key_path=None,
         )
 
     def on_mount(self) -> None:
