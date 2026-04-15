@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 from typing import ClassVar, cast
 
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import (
     Button,
     DataTable,
@@ -31,24 +34,30 @@ from agentsloop.domain.models import (
     DEFAULT_VALIDATION_COMMAND,
     GEMINI_MODELS,
     GeminiModel,
+    NodeRun,
     RuntimeConfig,
     WorkflowState,
 )
 from agentsloop.project_config import ProjectContext
 from agentsloop.runtime.git_runtime import (
     env_with_agent_ssh,
+    is_ssh_remote_url,
     list_available_ssh_keys,
     list_remote_branches,
     verify_git_write_access,
 )
+from agentsloop.runtime.workflow_control import reconcile_workflow_state, request_workflow_stop
 from agentsloop.runtime.workflow_launcher import spawn_workflow_process
-from agentsloop.storage.json_store import RunStore
+from agentsloop.storage.json_store import RunStore, read_text_tail
 from agentsloop.tui.widgets import (
     LargeLogo,
+    LoadingLogo,
     node_report_markdown,
     populate_events,
     populate_nodes_table,
     populate_runs_table,
+    status_text,
+    workflow_events_plain_text,
 )
 
 
@@ -62,19 +71,19 @@ class WarningScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         """Compose the warning view."""
-        with Vertical(classes="warning-container"):
-            with Vertical(classes="warning-panel"):
-                yield Label("CRITICAL SECURITY WARNING", classes="warning-title")
-                yield Static(
-                    "Agents operate in autonomous (YOLO) mode. It is critical to run them "
-                    "in a controlled environment and ensure your repository's main branch is protected.\n\n"
-                    "Users are solely responsible for all actions performed by the agents; no liability "
-                    "is assumed for any unintended consequences or damages.",
-                    classes="warning-text",
-                )
-                with Horizontal(classes="actions centered-actions"):
-                    yield Button("I Understand & Accept", variant="success", id="accept")
-                    yield Button("Quit", variant="error", id="quit")
+        with Vertical(classes="warning-container"), Vertical(classes="warning-panel"):
+            yield Label("CRITICAL SECURITY WARNING", classes="warning-title")
+            yield Static(
+                "Agents operate in autonomous (YOLO) mode. It is critical to run them "
+                "in a controlled environment and ensure your repository's main branch is "
+                "protected.\n\nUsers are solely responsible for all actions performed "
+                "by the agents; no liability is assumed for any unintended consequences "
+                "or damages.",
+                classes="warning-text",
+            )
+            with Horizontal(classes="actions centered-actions"):
+                yield Button("I Understand & Accept", variant="success", id="accept")
+                yield Button("Quit", variant="error", id="quit")
 
     @on(Button.Pressed, "#accept")
     def accept(self) -> None:
@@ -106,10 +115,10 @@ class SSHKeySelectionScreen(Screen[None]):
                     "This key must have write access to the repository.",
                     classes="hint",
                 )
-                
+
                 options = [(str(key), str(key)) for key in self.available_keys]
                 default_value = str(self.project_context.ssh_key_path)
-                
+
                 # Ensure the current key is in options even if not in common discovery
                 if default_value not in [opt[1] for opt in options]:
                     options.insert(0, (default_value, default_value))
@@ -120,14 +129,14 @@ class SSHKeySelectionScreen(Screen[None]):
                     id="ssh_key_select",
                     prompt="Choose an SSH key",
                 )
-                
+
                 yield Label("OR ENTER CUSTOM PATH", classes="field-label")
                 yield Input(
                     value=default_value,
                     placeholder="~/.ssh/your_key",
                     id="ssh_key_custom",
                 )
-                
+
                 yield Static("", id="test-status", classes="hint")
 
             with Horizontal(classes="actions centered-actions"):
@@ -153,7 +162,7 @@ class SSHKeySelectionScreen(Screen[None]):
         if not ssh_key_str:
             self.notify("SSH key path is required", severity="error")
             return
-            
+
         ssh_key = Path(ssh_key_str).expanduser()
         if not ssh_key.exists():
             self.notify(f"SSH key not found: {ssh_key}", severity="error")
@@ -167,25 +176,22 @@ class SSHKeySelectionScreen(Screen[None]):
         try:
             # env_with_agent_ssh and verify_git_write_access are blocking
             # We wrap them to keep the UI alive.
-            import asyncio
 
-            def check():
+            def check() -> None:
                 env = env_with_agent_ssh(self.project_context.repo_root, ssh_key_path=ssh_key)
                 verify_git_write_access(self.project_context.repo_root, env)
 
             await asyncio.to_thread(check)
-            
+
             # Update the context
             self.project_context.ssh_key_path = ssh_key
             # If already configured, we might want to update the stored config too
             if self.project_context.configured:
-                self.project_context.save_config(
-                    self.project_context.validation_command, ssh_key
-                )
+                self.project_context.save_config(self.project_context.validation_command, ssh_key)
 
             # Success, move to the next screen
             self._finish_selection()
-            
+
         except Exception as exc:
             self._handle_test_error(str(exc))
 
@@ -260,6 +266,7 @@ class HomeScreen(Screen[None]):
         super().__init__()
         self.store = store
         self.project_context = project_context
+        self._last_runs_hash: str = ""
 
     def compose(self) -> ComposeResult:
         """Compose the home screen."""
@@ -289,12 +296,21 @@ class HomeScreen(Screen[None]):
 
     def action_refresh(self) -> None:
         """Refresh the run table."""
-        populate_runs_table(self.query_one("#runs", DataTable), self.store.list_runs())
+        for run in self.store.list_runs():
+            if run.status in {"running", "stopping"}:
+                reconcile_workflow_state(self.store, run.task_id)
+        runs = self.store.list_runs()
+        runs_hash = str([run.model_dump(mode="json") for run in runs])
+        if runs_hash != self._last_runs_hash:
+            populate_runs_table(self.query_one("#runs", DataTable), runs)
+            self._last_runs_hash = runs_hash
 
     @on(DataTable.RowSelected, "#runs")
     def on_row_selected(self, event: DataTable.RowSelected) -> None:
         """Open the selected workflow."""
         task_id = str(event.row_key.value)
+        if task_id.startswith(("app:", "spacer:")):
+            return
         self.app.push_screen(WorkflowScreen(self.store, task_id))
 
     def action_new(self) -> None:
@@ -375,12 +391,11 @@ class LaunchScreen(Screen[None]):
         """Set screen title and fetch remote branches on mount."""
         self.app.title = "New Workflow"
         self.app.sub_title = str(self.project_context.repo_root)
-        self.run_worker(self._fetch_branches)
+        self.run_worker(self._fetch_branches())
 
     async def _fetch_branches(self) -> None:
         """Fetch remote branches in the background."""
         try:
-            import asyncio
             env = env_with_agent_ssh(
                 self.project_context.repo_root, ssh_key_path=self.project_context.ssh_key_path
             )
@@ -457,12 +472,13 @@ class LaunchScreen(Screen[None]):
         if not validation_command:
             self.notify("Validation command is required", severity="error")
             return
-        repo_url = self.project_context.remote_url or str(self.project_context.repo_root)
-        if not self.project_context.remote_url:
+        repo_url = self.project_context.remote_url
+        if not repo_url or not is_ssh_remote_url(repo_url):
             self.notify(
-                "No 'origin' remote found. Work will only be pushed to your local repository.",
-                severity="warning",
+                "Git remote 'origin' must use SSH before launching a workflow.",
+                severity="error",
             )
+            return
 
         config = RuntimeConfig(
             model=model,
@@ -512,17 +528,33 @@ class WorkflowScreen(Screen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "app.pop_screen", "Back"),
         ("r", "refresh", "Refresh"),
+        ("p", "toggle_refresh", "Pause live"),
+        ("c", "copy_current_node", "Copy node"),
+        ("e", "copy_events", "Copy activity"),
+        ("s", "stop_workflow", "Stop"),
     ]
 
     def __init__(self, store: RunStore, task_id: str) -> None:
         super().__init__()
         self.store = store
         self.task_id = task_id
-        self._last_nodes_count = -1
+        self._last_nodes_hash = 0
+        self._last_events_hash = ""
+        self._last_report_content = ""
+        self._last_status_content = ""
+        self._report_mode = ""
+        self._refresh_paused = False
+        self._refresh_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         """Compose the workflow screen."""
         with Vertical(classes="page"):
+            with Horizontal(id="workflow-status-bar"):
+                yield Static("", id="workflow-status")
+                yield Button("Pause", id="pause-refresh")
+                yield Button("Copy Node", id="copy-node")
+                yield Button("Copy Activity", id="copy-events")
+                yield Button("Stop", variant="error", id="stop-workflow")
             with Horizontal(id="workflow-top"):
                 with Vertical(id="workflow-nodes-panel"):
                     yield Label("NODES", classes="table-title")
@@ -541,17 +573,19 @@ class WorkflowScreen(Screen[None]):
         """Start polling workflow events."""
         self.app.title = f"Workflow {self.task_id[:8]}"
         self.app.sub_title = "Viewing activity..."
-        self.set_interval(1.5, self.action_refresh)
+        self._refresh_timer = self.set_interval(1.5, self.action_refresh)
         self.action_refresh()
 
     def action_refresh(self) -> None:
         """Refresh events and nodes from the store."""
         try:
-            state = self.store.load_state(self.task_id)
+            state = reconcile_workflow_state(self.store, self.task_id)
+            self._update_workflow_status(state)
             nodes = state.node_runs
+            nodes_hash = hash(str(nodes))
 
-            # Only update nodes table if count changed or first run
-            if len(nodes) != self._last_nodes_count:
+            # Update nodes table if count OR status changed
+            if nodes_hash != self._last_nodes_hash:
                 table = self.query_one("#nodes", DataTable)
                 current_key = None
                 try:
@@ -563,7 +597,7 @@ class WorkflowScreen(Screen[None]):
                     pass
 
                 populate_nodes_table(table, nodes)
-                self._last_nodes_count = len(nodes)
+                self._last_nodes_hash = nodes_hash
 
                 # Reselect or select last
                 if current_key:
@@ -571,19 +605,95 @@ class WorkflowScreen(Screen[None]):
                         table.move_cursor(row=table.get_row_index(current_key))
                     except Exception:
                         table.move_cursor(row=len(nodes) - 1)
-                elif len(nodes) > 0:
-                    table.move_cursor(row=len(nodes) - 1)
-
-                self._update_report(state)
+                elif nodes:
+                    last_node = nodes[-1]
+                    key = f"{last_node.role}:{last_node.iteration}"
+                    table.move_cursor(row=table.get_row_index(key))
 
             # Always refresh the current report content to show live progress
             self._update_report(state)
 
-            populate_events(
-                self.query_one("#events", RichLog), self.store.read_events(self.task_id)
-            )
+            self._update_events()
         except Exception:
             pass
+
+    @on(Button.Pressed, "#pause-refresh")
+    def on_pause_pressed(self) -> None:
+        """Pause or resume live refresh."""
+        self.action_toggle_refresh()
+
+    @on(Button.Pressed, "#copy-node")
+    def on_copy_node_pressed(self) -> None:
+        """Copy the selected node output."""
+        self.action_copy_current_node()
+
+    @on(Button.Pressed, "#copy-events")
+    def on_copy_events_pressed(self) -> None:
+        """Copy workflow activity."""
+        self.action_copy_events()
+
+    def action_toggle_refresh(self) -> None:
+        """Pause or resume live refresh to allow terminal text selection."""
+        self._refresh_paused = not self._refresh_paused
+        if self._refresh_timer is not None:
+            if self._refresh_paused:
+                self._refresh_timer.pause()
+            else:
+                self._refresh_timer.resume()
+        self._set_loading_animations_paused(self._refresh_paused)
+        self._update_pause_button()
+        self.app.sub_title = (
+            "Live refresh paused" if self._refresh_paused else "Viewing activity..."
+        )
+        if not self._refresh_paused:
+            self.action_refresh()
+
+    @on(Button.Pressed, "#stop-workflow")
+    def on_stop_pressed(self) -> None:
+        """Request a running workflow stop."""
+        self.action_stop_workflow()
+
+    def action_stop_workflow(self) -> None:
+        """Request a workflow stop without blocking the TUI."""
+        try:
+            state = self.store.load_state(self.task_id)
+        except Exception:
+            self.notify("Unable to read workflow state", severity="error")
+            return
+        if state.status not in {"running", "stopping"}:
+            self.notify(f"Workflow is already {state.status}", severity="warning")
+            return
+        self.run_worker(self._request_stop())
+
+    async def _request_stop(self) -> None:
+        """Run the stop command off the UI thread."""
+        await asyncio.to_thread(request_workflow_stop, self.store, self.task_id)
+        self.notify("Stop requested", severity="warning")
+        self.action_refresh()
+
+    def action_copy_current_node(self) -> None:
+        """Copy the currently selected node report or live logs."""
+        try:
+            state = self.store.load_state(self.task_id)
+            node = self._selected_node(state)
+            content = self._copyable_node_text(state, node)
+        except Exception:
+            self.notify("Unable to copy node content", severity="error")
+            return
+        self.app.copy_to_clipboard(content)
+        self.notify("Node content copied")
+
+    def action_copy_events(self) -> None:
+        """Copy the workflow activity log."""
+        try:
+            content = workflow_events_plain_text(self.store.read_events(self.task_id))
+        except Exception:
+            self.notify("Unable to copy activity", severity="error")
+            return
+        if not content:
+            content = "No workflow activity."
+        self.app.copy_to_clipboard(content)
+        self.notify("Workflow activity copied")
 
     @on(DataTable.RowSelected, "#nodes")
     def on_node_selected(self) -> None:
@@ -596,19 +706,158 @@ class WorkflowScreen(Screen[None]):
 
     def _update_report(self, state: WorkflowState) -> None:
         """Update the Markdown report for the selected node."""
-        table = self.query_one("#nodes", DataTable)
-        if table.row_count == 0:
+        report_panel = self.query_one("#workflow-report-panel", Vertical)
+        node = self._selected_node(state)
+
+        if node is None:
+            self._show_live_output(report_panel, state, None)
             return
 
-        try:
-            key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
-            role, iter_str = str(key).split(":")
-            iteration = int(iter_str)
+        content = node_report_markdown(node)
+        if content is None and node.status == "running":
+            self._show_live_output(report_panel, state, node)
+            return
+        if content is None:
+            content = self._node_log_markdown(node)
+        self._show_markdown(report_panel, content)
 
-            node = next(
-                (n for n in state.node_runs if n.role == role and n.iteration == iteration), None
+    def _update_workflow_status(self, state: WorkflowState) -> None:
+        """Render compact workflow status and lifecycle hints."""
+        status = status_text(state.status)
+        text = Text.assemble(
+            ("WORKFLOW ", "bold"),
+            status,
+            ("  ", "dim"),
+            (f"loop {state.loop_count}/{state.config.loop_limit}", "dim"),
+            ("  ", "dim"),
+            (
+                "paused" if self._refresh_paused else "live",
+                "#d7b66f" if self._refresh_paused else "#7fbf9a",
+            ),
+            ("  P pause/resume  C copy node  E copy activity", "dim"),
+        )
+        if state.failure_message:
+            text.append(f"  {state.failure_message}", style="bold #e07868")
+        status_content = text.plain + str(state.failure_message)
+        if status_content != self._last_status_content:
+            self.query_one("#workflow-status", Static).update(text)
+            self._last_status_content = status_content
+        stop = self.query_one("#stop-workflow", Button)
+        stop.disabled = state.status not in {"running", "stopping"}
+        self._update_pause_button()
+
+    def _selected_node(self, state: WorkflowState) -> NodeRun | None:
+        """Return the selected node, falling back to the latest node."""
+        if not state.node_runs:
+            return None
+        table = self.query_one("#nodes", DataTable)
+        try:
+            key = str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+            if key.startswith("spacer:"):
+                return state.node_runs[-1]
+            if key.startswith("iteration:"):
+                iteration = int(key.split(":", 1)[1])
+                return _latest_node_in_iteration(state.node_runs, iteration)
+            role, iter_str = key.split(":")
+            iteration = int(iter_str)
+            return next(
+                node
+                for node in state.node_runs
+                if node.role == role and node.iteration == iteration
             )
-            if node:
-                self.query_one("#report", Markdown).update(node_report_markdown(node))
         except Exception:
-            pass
+            return state.node_runs[-1]
+
+    def _show_live_output(
+        self,
+        report_panel: Vertical,
+        state: WorkflowState,
+        node: NodeRun | None,
+    ) -> None:
+        """Show the animated working state plus a live log tail."""
+        if self._report_mode != "live" or not report_panel.query("#node-live-log"):
+            for widget in report_panel.children:
+                widget.remove()
+            report_panel.mount(LoadingLogo(classes="node-loading-logo"))
+            report_panel.mount(RichLog(id="node-live-log", highlight=True, markup=False))
+            self._report_mode = "live"
+            self._last_report_content = ""
+            self._set_loading_animations_paused(self._refresh_paused)
+        content = self._live_output_text(state, node)
+        if content == self._last_report_content:
+            return
+        log = self.query_one("#node-live-log", RichLog)
+        log.clear()
+        log.write(content)
+        self._last_report_content = content
+
+    def _live_output_text(self, state: WorkflowState, node: NodeRun | None) -> str:
+        """Return live text for the current node or worker startup."""
+        if node is not None:
+            output = self.store.read_node_log_tail(node, lines=120)
+            return output or "Waiting for node output..."
+        if state.worker_log_path is not None:
+            output = read_text_tail(state.worker_log_path, lines=120)
+            if output:
+                return output
+        return "Waiting for the first node to start..."
+
+    def _node_log_markdown(self, node: NodeRun) -> str:
+        """Render logs when a node ended without a Markdown report."""
+        output = self.store.read_node_log_tail(node, lines=120) or "No node output was written."
+        return f"# {node.role.upper()} {node.iteration:02d}\n\n```text\n{output}\n```"
+
+    def _show_markdown(self, report_panel: Vertical, content: str) -> None:
+        """Show the final node report Markdown."""
+        if self._report_mode != "markdown" or not report_panel.query(Markdown):
+            for widget in report_panel.children:
+                widget.remove()
+            report_panel.mount(Markdown(id="report"))
+            self._report_mode = "markdown"
+            self._last_report_content = ""
+        if content == self._last_report_content:
+            return
+        self.query_one("#report", Markdown).update(content)
+        self._last_report_content = content
+
+    def _update_events(self) -> None:
+        """Refresh the activity log only when event content changed."""
+        events = self.store.read_events(self.task_id)
+        events_hash = "\n".join(event.model_dump_json() for event in events[-80:])
+        if events_hash == self._last_events_hash:
+            return
+        populate_events(self.query_one("#events", RichLog), events)
+        self._last_events_hash = events_hash
+
+    def _copyable_node_text(self, state: WorkflowState, node: NodeRun | None) -> str:
+        """Return the selected node panel as copyable plain text."""
+        if node is None:
+            if state.worker_log_path is not None:
+                return read_text_tail(state.worker_log_path, lines=200) or "No worker output yet."
+            return "No node selected."
+        if node.report_path.exists():
+            return node.report_path.read_text(encoding="utf-8")
+        output = self.store.read_node_log_tail(node, lines=200)
+        return output or "No node output yet."
+
+    def _set_loading_animations_paused(self, paused: bool) -> None:
+        """Pause or resume loading animations mounted in this screen."""
+        for logo in self.query(LoadingLogo):
+            if paused:
+                logo.pause_animation()
+            else:
+                logo.resume_animation()
+
+    def _update_pause_button(self) -> None:
+        """Keep the pause button label in sync."""
+        self.query_one("#pause-refresh", Button).label = (
+            "Resume" if self._refresh_paused else "Pause"
+        )
+
+
+def _latest_node_in_iteration(nodes: list[NodeRun], iteration: int) -> NodeRun | None:
+    """Return the latest node recorded for one iteration."""
+    matches = [node for node in nodes if node.iteration == iteration]
+    if not matches:
+        return None
+    return matches[-1]

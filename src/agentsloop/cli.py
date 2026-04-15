@@ -10,7 +10,7 @@ import typer
 
 from agentsloop.domain.models import DEFAULT_VALIDATION_COMMAND
 from agentsloop.project_config import ProjectConfigStore, ProjectContext
-from agentsloop.runtime.git_runtime import discover_ssh_key_path
+from agentsloop.runtime.git_runtime import discover_ssh_key_path, require_ssh_origin_remote
 from agentsloop.tui.app import WorkflowApp
 
 cli = typer.Typer(
@@ -41,9 +41,9 @@ def launch(
     if ctx.invoked_subcommand is None:
         try:
             project_context = build_project_context(Path.cwd(), ssh_key)
-        except EnvironmentError as e:
+        except OSError as e:
             typer.secho(str(e), err=True, fg=typer.colors.RED)
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
         if project_context is None:
             typer.secho(
@@ -74,7 +74,7 @@ def build_project_context(cwd: Path, ssh_key: Path | None = None) -> ProjectCont
         resolved_ssh_key = discover_ssh_key_path()
 
     if not resolved_ssh_key:
-        raise EnvironmentError(
+        raise OSError(
             "Git SSH key path is mandatory. Please use --ssh-key, "
             "set AGENTS_GIT_SSH_KEY_PATH, or ensure a default key exists in ~/.ssh/id_*"
         )
@@ -82,7 +82,7 @@ def build_project_context(cwd: Path, ssh_key: Path | None = None) -> ProjectCont
     branch = current_git_branch(repo_root)
     if branch is None:
         return None
-    remote_url = get_git_remote_url(repo_root)
+    remote_url = require_ssh_origin_remote(repo_root)
     return ProjectContext(
         repo_root=repo_root,
         base_branch=branch,
@@ -121,20 +121,6 @@ def current_git_branch(repo_root: Path) -> str | None:
     )
     branch = result.stdout.strip()
     return branch or None
-
-
-def get_git_remote_url(repo_root: Path) -> str | None:
-    """Return the origin remote URL if it exists."""
-    result = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
-        cwd=repo_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip()
 
 
 def main() -> None:

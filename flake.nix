@@ -25,6 +25,7 @@
             gemini-cli
             github-copilot-cli
             nodejs
+            codex
           ];
 
           shellHook = ''

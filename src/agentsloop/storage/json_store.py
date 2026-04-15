@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import orjson
 
@@ -22,11 +23,27 @@ from agentsloop.domain.models import (
 
 type JsonPayload = dict[str, Any] | list[Any]
 EventSink = Callable[[WorkflowEvent], None]
+LOG_TAIL_BYTES = 64 * 1024
 
 
 def json_dumps(payload: JsonPayload) -> str:
     """Serialize JSON payloads with stable indentation."""
     return orjson.dumps(payload, option=orjson.OPT_INDENT_2 | orjson.OPT_APPEND_NEWLINE).decode()
+
+
+def application_name_from_repo_url(repo_url: str) -> str:
+    """Return a stable application label from a repository URL."""
+    url = repo_url.strip().rstrip("/")
+    if not url:
+        return "Unknown application"
+    if "://" in url:
+        path = urlparse(url).path.strip("/")
+    elif ":" in url and not url.startswith("/"):
+        path = url.split(":", 1)[1].strip("/")
+    else:
+        path = Path(url).name
+    clean = path.removesuffix(".git")
+    return clean or url
 
 
 class RunStore:
@@ -60,6 +77,26 @@ class RunStore:
         path.write_text(json_dumps(payload), encoding="utf-8")
         self.event(state, "handoff_written", name=name, path=str(path))
         return path
+
+    def request_stop(self, state: WorkflowState, reason: str) -> Path:
+        """Persist a cooperative workflow stop request."""
+        path = self.stop_request_path(state)
+        path.write_text(json_dumps({"requested_at": utc_now(), "reason": reason}), encoding="utf-8")
+        if state.stop_requested_at is None:
+            state.stop_requested_at = utc_now()
+        if state.status == "running":
+            state.status = "stopping"
+        self.save_state(state)
+        self.event(state, "stop_requested", task_id=state.task_id, reason=reason, path=str(path))
+        return path
+
+    def stop_request_path(self, state: WorkflowState) -> Path:
+        """Return the durable stop request path for a workflow."""
+        return state.run_dir / "stop-request.json"
+
+    def stop_requested(self, state: WorkflowState) -> bool:
+        """Return whether a workflow has been asked to stop."""
+        return self.stop_request_path(state).exists() or state.stop_requested_at is not None
 
     def start_node(
         self,
@@ -128,6 +165,35 @@ class RunStore:
             exit_code=exit_code,
             **fields,
         )
+
+    def finish_running_nodes(
+        self,
+        state: WorkflowState,
+        *,
+        status: NodeStatus,
+        exit_code: int | None,
+        reason: str,
+    ) -> None:
+        """Mark every still-running node with a terminal status."""
+        changed = False
+        for node in state.node_runs:
+            if node.status != "running":
+                continue
+            node.status = status
+            node.exit_code = exit_code
+            node.finished_at = utc_now()
+            changed = True
+            self.event(
+                state,
+                "node_finished",
+                node=node.role,
+                iteration=node.iteration,
+                status=status,
+                exit_code=exit_code,
+                reason=reason,
+            )
+        if changed:
+            self.save_state(state)
 
     def node_dir(self, state: WorkflowState, role: NodeRole, iteration: int) -> Path:
         """Return the artifact directory for a node execution."""
@@ -249,6 +315,8 @@ class RunStore:
             summaries.append(
                 RunSummary(
                     task_id=state.task_id,
+                    application=application_name_from_repo_url(state.config.repo_url),
+                    repo_url=state.config.repo_url,
                     status=state.status,
                     approval_status=state.approval_status,
                     created_at=state.created_at,
@@ -278,6 +346,15 @@ class RunStore:
             return "_No report written yet._"
         return node_run.report_path.read_text(encoding="utf-8")
 
+    def read_node_log_tail(self, node_run: NodeRun, lines: int = 80) -> str:
+        """Read recent stdout/stderr output for one node."""
+        parts: list[str] = []
+        for label, path in (("stdout", node_run.stdout_path), ("stderr", node_run.stderr_path)):
+            content = read_text_tail(path, lines=lines)
+            if content:
+                parts.append(f"[{label}]\n{content}")
+        return "\n\n".join(parts)
+
     def _find_node(self, state: WorkflowState, node_run: NodeRun) -> NodeRun:
         """Return the matching mutable node run stored in the workflow state."""
         for stored in state.node_runs:
@@ -285,3 +362,18 @@ class RunStore:
                 return stored
         state.node_runs.append(node_run)
         return node_run
+
+
+def read_text_tail(path: Path, *, lines: int = 80, max_bytes: int = LOG_TAIL_BYTES) -> str:
+    """Read the last lines of a UTF-8-ish text file without loading large logs."""
+    if not path.exists():
+        return ""
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        size = handle.tell()
+        handle.seek(max(0, size - max_bytes))
+        data = handle.read()
+    text = data.decode("utf-8", errors="replace")
+    if size > max_bytes:
+        text = text.split("\n", 1)[-1]
+    return "\n".join(text.splitlines()[-lines:])

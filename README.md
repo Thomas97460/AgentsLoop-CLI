@@ -63,6 +63,9 @@ agentsloop --runs-root ~/agentsloop-runs
 Inside the TUI:
 
 - press `n` to create a workflow
+- press `s` from a workflow view to request a stop for a running workflow
+- press `p` from a workflow view to pause live refresh before selecting terminal text
+- press `c` to copy the selected node content, or `e` to copy workflow activity
 - write the request for the agents
 - choose a Gemini model
 - confirm the current repository branch
@@ -75,7 +78,7 @@ Runs are stored outside the source repository by default:
 ~/agentsloop-runs/<run-id>/
 ```
 
-Each run stores state, events, node reports, provider logs, structured results, and isolated repository clones.
+Each run stores state, lifecycle events, node reports, live provider logs, structured results, stop requests, and isolated repository clones.
 
 The validation node runs a configurable shell command in a fresh clone of the developer branch. The default is:
 

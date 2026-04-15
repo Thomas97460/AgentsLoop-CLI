@@ -13,7 +13,7 @@ from agentsloop.paths import runs_root
 from agentsloop.project_config import ProjectContext
 from agentsloop.runtime.git_runtime import discover_ssh_key_path
 from agentsloop.storage.json_store import RunStore
-from agentsloop.tui.screens import LoadingScreen, WarningScreen
+from agentsloop.tui.screens import WarningScreen
 from agentsloop.tui.theme import APP_CSS
 
 # Soft themes definitions
@@ -22,10 +22,10 @@ SOFT_DARK = Theme(
     primary="#f0a35a",
     secondary="#88a7c7",
     accent="#7fbf9a",
-    background="#1e1e1e",
-    surface="#262626",
-    panel="#323232",
-    foreground="#eee7dd",
+    background="#2a2a2a",
+    surface="#363636",
+    panel="#424242",
+    foreground="#f3eee7",
 )
 
 SOFT_LIGHT = Theme(

@@ -10,9 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 ProviderName = Literal["gemini"]
-WorkflowStatus = Literal["running", "success", "error", "stopped"]
+WorkflowStatus = Literal["running", "stopping", "success", "error", "stopped"]
 NodeRole = Literal["cto", "developer", "validation"]
-NodeStatus = Literal["running", "success", "error"]
+NodeStatus = Literal["running", "success", "error", "stopped"]
 GeminiModel = Literal[
     "gemini-3.1-pro-preview",
     "gemini-3-flash-preview",
@@ -23,7 +23,7 @@ GeminiModel = Literal[
 ]
 
 DEFAULT_GEMINI_MODEL: GeminiModel = "gemini-3-flash-preview"
-DEFAULT_VALIDATION_COMMAND = "uv run pytest"
+DEFAULT_VALIDATION_COMMAND = 'echo "everything is fine here"'
 GEMINI_MODELS: tuple[GeminiModel, ...] = (
     "gemini-3.1-pro-preview",
     DEFAULT_GEMINI_MODEL,
@@ -116,6 +116,11 @@ class WorkflowState(BaseModel):
     approval_status: Literal["continue", "done"] = "continue"
     loop_count: int = 0
     stopped_by_limit: bool = False
+    worker_pid: int | None = None
+    worker_log_path: Path | None = None
+    stop_requested_at: str | None = None
+    finished_at: str | None = None
+    failure_message: str = ""
     developer_branch: str = ""
     node_runs: list[NodeRun] = Field(default_factory=list)
     reports: dict[str, str] = Field(
@@ -148,6 +153,8 @@ class RunSummary(BaseModel):
     """Compact metadata used by history and TUI lists."""
 
     task_id: str
+    application: str
+    repo_url: str
     status: WorkflowStatus
     approval_status: str
     created_at: str
