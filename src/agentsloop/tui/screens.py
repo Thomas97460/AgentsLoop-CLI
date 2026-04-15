@@ -67,7 +67,7 @@ class WarningScreen(Screen[None]):
                     "is assumed for any unintended consequences or damages.",
                     classes="warning-text",
                 )
-                with Horizontal(classes="actions"):
+                with Horizontal(classes="actions centered-actions"):
                     yield Button("I Understand & Accept", variant="success", id="accept")
                     yield Button("Quit", variant="error", id="quit")
 

@@ -122,6 +122,14 @@ Footer {
     padding: 1 0 0 0;
 }
 
+.actions Button {
+    margin-left: 2;
+}
+
+.centered-actions {
+    align: center middle;
+}
+
 TextArea#request {
     height: 1fr;
     min-height: 5;
