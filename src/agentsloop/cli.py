@@ -39,15 +39,6 @@ def launch(
 ) -> None:
     """Open the Textual application."""
     if ctx.invoked_subcommand is None:
-        typer.secho(
-            "WARNING: Agents operate in autonomous (YOLO) mode. It is critical to run them "
-            "in a controlled environment and ensure your repository's main branch is protected.\n"
-            "Users are solely responsible for all actions performed by the agents; no liability "
-            "is assumed for any unintended consequences or damages.",
-            fg=typer.colors.YELLOW,
-            bold=True,
-        )
-
         try:
             project_context = build_project_context(Path.cwd(), ssh_key)
         except EnvironmentError as e:

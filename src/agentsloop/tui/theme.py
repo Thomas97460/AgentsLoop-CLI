@@ -219,4 +219,32 @@ RichLog:focus {
     width: auto;
     align: center middle;
 }
+
+.warning-container {
+    align: center middle;
+    height: 100%;
+}
+
+.warning-panel {
+    width: 60%;
+    height: auto;
+    background: $panel;
+    border: double $error;
+    padding: 2 4;
+    align: center middle;
+}
+
+.warning-title {
+    color: $error;
+    text-style: bold;
+    margin-bottom: 1;
+    width: 100%;
+    text-align: center;
+}
+
+.warning-text {
+    margin-bottom: 2;
+    text-align: center;
+    width: 100%;
+}
 """

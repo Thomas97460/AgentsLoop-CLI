@@ -13,7 +13,7 @@ from agentsloop.paths import runs_root
 from agentsloop.project_config import ProjectContext
 from agentsloop.runtime.git_runtime import discover_ssh_key_path
 from agentsloop.storage.json_store import RunStore
-from agentsloop.tui.screens import LoadingScreen
+from agentsloop.tui.screens import LoadingScreen, WarningScreen
 from agentsloop.tui.theme import APP_CSS
 
 # Soft themes definitions
@@ -77,8 +77,8 @@ class WorkflowApp(App[None]):
         self.register_theme(SOFT_LIGHT)
         self.theme = "soft-dark"
 
-        # Start with the loading/verification screen
-        self.push_screen(LoadingScreen(self.store, self.project_context))
+        # Start with the mandatory security warning
+        self.push_screen(WarningScreen(self.store, self.project_context))
 
     def action_toggle_theme(self) -> None:
         """Switch between soft-dark and soft-light themes."""

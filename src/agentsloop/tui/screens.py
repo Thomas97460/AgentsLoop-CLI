@@ -47,6 +47,41 @@ from agentsloop.tui.widgets import (
 )
 
 
+class WarningScreen(Screen[None]):
+    """Mandatory security warning before entering the application."""
+
+    def __init__(self, store: RunStore, project_context: ProjectContext) -> None:
+        super().__init__()
+        self.store = store
+        self.project_context = project_context
+
+    def compose(self) -> ComposeResult:
+        """Compose the warning view."""
+        with Vertical(classes="warning-container"):
+            with Vertical(classes="warning-panel"):
+                yield Label("CRITICAL SECURITY WARNING", classes="warning-title")
+                yield Static(
+                    "Agents operate in autonomous (YOLO) mode. It is critical to run them "
+                    "in a controlled environment and ensure your repository's main branch is protected.\n\n"
+                    "Users are solely responsible for all actions performed by the agents; no liability "
+                    "is assumed for any unintended consequences or damages.",
+                    classes="warning-text",
+                )
+                with Horizontal(classes="actions"):
+                    yield Button("I Understand & Accept", variant="success", id="accept")
+                    yield Button("Quit", variant="error", id="quit")
+
+    @on(Button.Pressed, "#accept")
+    def accept(self) -> None:
+        """Move to the loading screen."""
+        self.app.switch_screen(LoadingScreen(self.store, self.project_context))
+
+    @on(Button.Pressed, "#quit")
+    def quit_app(self) -> None:
+        """Exit the application."""
+        self.app.exit()
+
+
 class LoadingScreen(Screen[None]):
     """Startup screen that verifies repository access."""
 
