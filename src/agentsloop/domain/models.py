@@ -23,7 +23,7 @@ GeminiModel = Literal[
 ]
 
 DEFAULT_GEMINI_MODEL: GeminiModel = "gemini-3-flash-preview"
-DEFAULT_VALIDATION_COMMAND = "uv run pytest"
+DEFAULT_VALIDATION_COMMAND = "env PYTHONPATH=src uv run pytest"
 GEMINI_MODELS: tuple[GeminiModel, ...] = (
     "gemini-3.1-pro-preview",
     DEFAULT_GEMINI_MODEL,

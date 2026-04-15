@@ -50,7 +50,7 @@ Run these before opening a pull request:
 uv run ruff format .
 uv run ruff check .
 uv run mypy src tests
-uv run pytest
+env PYTHONPATH=src uv run pytest
 uv build
 ```
 
