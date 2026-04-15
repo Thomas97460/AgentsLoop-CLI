@@ -41,9 +41,9 @@ def launch(
     if ctx.invoked_subcommand is None:
         try:
             project_context = build_project_context(Path.cwd(), ssh_key)
-        except EnvironmentError as e:
+        except OSError as e:
             typer.secho(str(e), err=True, fg=typer.colors.RED)
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
         if project_context is None:
             typer.secho(
@@ -74,7 +74,7 @@ def build_project_context(cwd: Path, ssh_key: Path | None = None) -> ProjectCont
         resolved_ssh_key = discover_ssh_key_path()
 
     if not resolved_ssh_key:
-        raise EnvironmentError(
+        raise OSError(
             "Git SSH key path is mandatory. Please use --ssh-key, "
             "set AGENTS_GIT_SSH_KEY_PATH, or ensure a default key exists in ~/.ssh/id_*"
         )

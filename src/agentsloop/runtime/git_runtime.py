@@ -10,6 +10,15 @@ from pathlib import Path
 QUOTE_WRAPPED_MIN_LENGTH = 2
 
 
+class GitCommandError(RuntimeError):
+    """Raised when a checked Git command fails."""
+
+    def __init__(self, args: list[str], result: subprocess.CompletedProcess[str]) -> None:
+        self.args_list = args
+        self.result = result
+        super().__init__(_format_git_error(args, result))
+
+
 def load_env_file(path: Path) -> dict[str, str]:
     """Load simple KEY=VALUE entries without shell evaluation."""
     values: dict[str, str] = {}
@@ -82,7 +91,7 @@ def env_with_agent_ssh(
     if not key_path:
         default_key = discover_ssh_key_path()
         if not default_key:
-            raise EnvironmentError(
+            raise OSError(
                 "Git SSH key path is mandatory. Please set AGENTS_GIT_SSH_KEY_PATH "
                 "or ensure a default key exists in ~/.ssh/id_*"
             )
@@ -91,6 +100,8 @@ def env_with_agent_ssh(
     strict = env.get("AGENTS_GIT_SSH_STRICT_HOST_KEY_CHECKING") or "accept-new"
     command_parts = [
         "ssh",
+        "-F",
+        "/dev/null",
         "-i",
         shlex.quote(str(Path(key_path).expanduser())),
         "-o",
@@ -105,7 +116,7 @@ def env_with_agent_ssh(
         command_parts.extend(
             ["-o", f"UserKnownHostsFile={shlex.quote(str(Path(known_hosts).expanduser()))}"]
         )
-    env["GIT_SSH_COMMAND"] = env.get("GIT_SSH_COMMAND", " ".join(command_parts))
+    env["GIT_SSH_COMMAND"] = " ".join(command_parts)
     return env
 
 
@@ -117,11 +128,10 @@ def list_remote_branches(repo_path: Path, env: dict[str, str] | None = None) -> 
             repo_path,
             env,
             check=True,
-            capture_output=True,
         )
         branches: list[str] = []
-        for line in result.stdout.splitlines():
-            line = line.strip()
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
             # Skip HEAD pointer and empty lines
             if "->" in line or not line:
                 continue
@@ -136,22 +146,36 @@ def list_remote_branches(repo_path: Path, env: dict[str, str] | None = None) -> 
                 else:
                     branches.append(line)
         return sorted(list(set(branches)))
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (GitCommandError, FileNotFoundError):
         return []
 
 
 def run_git(
-    args: list[str], cwd: Path | None, env: dict[str, str], check: bool = False
+    args: list[str], cwd: Path | None, env: dict[str, str] | None, check: bool = False
 ) -> subprocess.CompletedProcess[str]:
     """Run one git command and return the completed process."""
-    return subprocess.run(
+    result = subprocess.run(
         ["git", *args],
         cwd=cwd,
         env=env,
         text=True,
         capture_output=True,
-        check=check,
+        check=False,
     )
+    if check and result.returncode != 0:
+        raise GitCommandError(["git", *args], result)
+    return result
+
+
+def _format_git_error(args: list[str], result: subprocess.CompletedProcess[str]) -> str:
+    """Return a readable Git failure message with captured output."""
+    command = " ".join(shlex.quote(arg) for arg in args)
+    parts = [f"Git command failed with exit {result.returncode}: {command}"]
+    if result.stderr.strip():
+        parts.extend(["", "stderr:", result.stderr.strip()])
+    if result.stdout.strip():
+        parts.extend(["", "stdout:", result.stdout.strip()])
+    return "\n".join(parts)
 
 
 def verify_git_write_access(repo_root: Path, env: dict[str, str]) -> None:
@@ -176,22 +200,32 @@ def verify_git_write_access(repo_root: Path, env: dict[str, str]) -> None:
         env,
     )
     if push_check.returncode != 0:
-        # We only treat it as a hard error if it's clearly a permission/auth issue.
-        err = push_check.stderr.lower()
-        is_auth_error = (
-            "permission denied" in err
-            or "authentication failed" in err
-            or "fatal: could not read from remote repository" in err
-            or "host key verification failed" in err
-        )
-        if is_auth_error:
-            msg = push_check.stderr.strip()
+        err = "\n".join((push_check.stderr, push_check.stdout)).lower()
+        if _is_remote_access_error(err):
+            msg = push_check.stderr.strip() or push_check.stdout.strip()
             if "batchmode" in err or "permission denied" in err:
                 msg += (
                     "\n\nHINT: Your SSH key might be protected by a passphrase "
                     "or missing from the agent."
                 )
             raise PermissionError(f"Remote git push access denied: {msg}")
+
+
+def _is_remote_access_error(message: str) -> bool:
+    """Return whether a Git remote failure is clearly auth or permission related."""
+    return any(
+        marker in message
+        for marker in (
+            "permission denied",
+            "permission to",
+            "denied to deploy key",
+            "authentication failed",
+            "could not read from remote repository",
+            "impossible de lire le dépôt distant",
+            "impossible de lire le depot distant",
+            "host key verification failed",
+        )
+    )
 
 
 def clone_for_agent(

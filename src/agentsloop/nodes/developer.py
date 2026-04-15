@@ -76,6 +76,17 @@ def run_developer(
     state.approval_status = "continue"
     store.write_node_result(state, node_run, result.model_dump(mode="json", exclude={"report_md"}))
     store.write_node_report(state, node_run, report_md)
+    if result.status == "error":
+        state.status = "error"
+        state.failure_message = f"Developer node failed with exit code {result.exit_code}"
+        store.finish_node(
+            state,
+            node_run,
+            status=result.status,
+            exit_code=result.exit_code,
+        )
+        store.save_state(state)
+        raise RuntimeError(state.failure_message)
     store.finish_node(
         state,
         node_run,

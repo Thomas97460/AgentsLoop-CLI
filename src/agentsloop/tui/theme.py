@@ -136,6 +136,26 @@ TextArea#request {
     margin-bottom: 1;
 }
 
+#workflow-status-bar {
+    height: 3;
+    width: 100%;
+    align: left middle;
+    margin-bottom: 1;
+}
+
+#workflow-status {
+    width: 1fr;
+    height: 1;
+}
+
+#pause-refresh,
+#copy-node,
+#copy-events,
+#stop-workflow {
+    width: auto;
+    margin-left: 1;
+}
+
 #workflow-top {
     height: 3fr;
     width: 100%;
@@ -158,6 +178,20 @@ TextArea#request {
     background: $panel;
     border: round $primary 40%;
     padding: 1 2;
+    align: center middle;
+}
+
+.node-loading-logo {
+    height: 10;
+    width: 100%;
+}
+
+#node-live-log {
+    height: 1fr;
+    width: 100%;
+    background: $surface;
+    border: none;
+    padding: 0 1;
 }
 
 #report {
