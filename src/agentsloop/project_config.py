@@ -50,6 +50,7 @@ class ProjectContext:
 
     repo_root: Path
     base_branch: str
+    ssh_key_path: Path | None
     validation_command: str = DEFAULT_VALIDATION_COMMAND
     config_store: ProjectConfigStore | None = None
     configured: bool = True
