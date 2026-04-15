@@ -350,10 +350,11 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
                 await pilot.pause()
                 await pilot.press("n")
                 model_select = app.screen.query_one("#model", Select)
+                base_branch_select = app.screen.query_one("#base_branch", Select)
                 validation_command = app.screen.query_one("#validation_command", Input)
                 assert model_select.value == DEFAULT_GEMINI_MODEL
+                assert base_branch_select.value == "main"
                 assert validation_command.value == DEFAULT_VALIDATION_COMMAND
-
     asyncio.run(run_app())
 
 

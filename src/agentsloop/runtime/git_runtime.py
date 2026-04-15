@@ -109,6 +109,37 @@ def env_with_agent_ssh(
     return env
 
 
+def list_remote_branches(repo_path: Path, env: dict[str, str] | None = None) -> list[str]:
+    """List remote branches from the 'origin' remote."""
+    try:
+        result = run_git(
+            ["branch", "-r"],
+            repo_path,
+            env,
+            check=True,
+            capture_output=True,
+        )
+        branches: list[str] = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            # Skip HEAD pointer and empty lines
+            if "->" in line or not line:
+                continue
+            # Remove 'origin/' prefix
+            if line.startswith("origin/"):
+                branches.append(line.removeprefix("origin/"))
+            else:
+                # Handle cases where it might just be the branch name or other remotes
+                parts = line.split("/", 1)
+                if len(parts) > 1:
+                    branches.append(parts[1])
+                else:
+                    branches.append(line)
+        return sorted(list(set(branches)))
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+
+
 def run_git(
     args: list[str], cwd: Path | None, env: dict[str, str], check: bool = False
 ) -> subprocess.CompletedProcess[str]:

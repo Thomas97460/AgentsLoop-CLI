@@ -38,6 +38,7 @@ from agentsloop.project_config import ProjectContext
 from agentsloop.runtime.git_runtime import (
     env_with_agent_ssh,
     list_available_ssh_keys,
+    list_remote_branches,
     verify_git_write_access,
 )
 from agentsloop.runtime.workflow_launcher import spawn_workflow_process
@@ -371,9 +372,29 @@ class LaunchScreen(Screen[None]):
         self.project_context = project_context
 
     def on_mount(self) -> None:
-        """Set screen title on mount."""
+        """Set screen title and fetch remote branches on mount."""
         self.app.title = "New Workflow"
         self.app.sub_title = str(self.project_context.repo_root)
+        self.run_worker(self._fetch_branches)
+
+    async def _fetch_branches(self) -> None:
+        """Fetch remote branches in the background."""
+        try:
+            import asyncio
+            env = env_with_agent_ssh(
+                self.project_context.repo_root, ssh_key_path=self.project_context.ssh_key_path
+            )
+            branches = await asyncio.to_thread(
+                list_remote_branches, self.project_context.repo_root, env
+            )
+            if branches:
+                select = self.query_one("#base_branch", Select)
+                select.set_options([(b, b) for b in branches])
+                if self.project_context.base_branch in branches:
+                    select.value = self.project_context.base_branch
+        except Exception:
+            # Fallback to current branch if fetch fails
+            pass
 
     def compose(self) -> ComposeResult:
         """Compose the launch form."""
@@ -388,10 +409,11 @@ class LaunchScreen(Screen[None]):
                     )
                 with Vertical(id="launch-side", classes="panel"):
                     yield Label("BASE BRANCH", classes="field-label")
-                    yield Input(
-                        placeholder=self.project_context.base_branch,
+                    yield Select(
+                        [(self.project_context.base_branch, self.project_context.base_branch)],
                         value=self.project_context.base_branch,
                         id="base_branch",
+                        prompt="Select base branch",
                     )
                     yield Label("GEMINI MODEL", classes="field-label")
                     yield Select[GeminiModel](
@@ -447,7 +469,7 @@ class LaunchScreen(Screen[None]):
             repo_url=repo_url,
             ssh_key_path=self.project_context.ssh_key_path,
             base_branch=(
-                self.query_one("#base_branch", Input).value.strip()
+                str(self.query_one("#base_branch", Select).value)
                 or self.project_context.base_branch
             ),
             loop_limit=loop_limit,
