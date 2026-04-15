@@ -54,6 +54,7 @@ def build_project_context(cwd: Path) -> ProjectContext | None:
     return ProjectContext(
         repo_root=repo_root,
         base_branch=branch,
+        ssh_key_path=None,
         validation_command=config.validation_command
         if config is not None
         else DEFAULT_VALIDATION_COMMAND,

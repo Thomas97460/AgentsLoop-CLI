@@ -274,7 +274,7 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
     """Instantiate the Textual shell and verify the model selector."""
 
     async def run_app() -> None:
-        app = WorkflowApp(tmp_path, ProjectContext(repo_root=tmp_path, base_branch="main"))
+        app = WorkflowApp(tmp_path, ProjectContext(repo_root=tmp_path, base_branch="main", ssh_key_path=None))
         original_push_screen = app.push_screen
         with (
             patch("agentsloop.tui.app.LoadingScreen"),
@@ -310,6 +310,7 @@ def test_textual_app_collects_first_run_validation_command(tmp_path: Path) -> No
         context = ProjectContext(
             repo_root=tmp_path,
             base_branch="main",
+            ssh_key_path=None,
             config_store=store,
             configured=False,
         )
