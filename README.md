@@ -1,23 +1,18 @@
 # AgentsLoop CLI
 
-AgentsLoop CLI launches and monitors an agent workflow around Gemini CLI:
+AgentsLoop CLI launches and monitors an agent workflow around Gemini CLI or Codex CLI:
 
 ```text
 CTO controller -> Developer agent -> Validation / tests -> CTO controller
 ```
 
-The project currently supports Gemini CLI only. The runtime is structured so other agent providers can be added later without changing the user-facing workflow.
+The project currently supports Gemini CLI and Codex CLI. The runtime is structured so other agent providers can be added later without changing the user-facing workflow.
 
 ## Install
 
-AgentsLoop CLI requires Python 3.12 or newer and a working `gemini` command. Gemini CLI requires Node.js 20 or newer when installed with npm.
+AgentsLoop CLI requires Python 3.12 or newer and at least one authenticated provider command: `gemini` or `codex`. Gemini CLI requires Node.js 20 or newer when installed with npm.
 
-Install Gemini CLI first and authenticate it:
-
-```bash
-npm install -g @google/gemini-cli
-gemini
-```
+### Install AgentsLoop With uv
 
 Install AgentsLoop CLI from GitHub:
 
@@ -41,6 +36,44 @@ If PyPI publishing is enabled for the repository:
 
 ```bash
 uv tool install agentsloop-cli
+```
+
+### Install AgentsLoop Without uv
+
+On Linux, install AgentsLoop into an isolated venv under `~/.local/share/agentsloop-cli`
+and expose the `agentsloop` command under `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Thomas97460/AgentsLoop-CLI/main/install.sh | sh
+```
+
+If `agentsloop` is not found after installation, add `~/.local/bin` to your shell `PATH`.
+For example:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The installer uses `python3 -m venv` and `pip`; it does not require `uv`. Override the
+source package when needed:
+
+```bash
+AGENTSLOOP_PACKAGE_SPEC="agentsloop-cli" sh install.sh
+```
+
+### Install Provider CLIs
+
+Install Gemini CLI and authenticate it when you want to use the Gemini provider:
+
+```bash
+npm install -g @google/gemini-cli
+gemini
+```
+
+Install and authenticate Codex CLI when you want to use the Codex provider:
+
+```bash
+codex login
 ```
 
 ## Use
@@ -67,7 +100,7 @@ Inside the TUI:
 - press `p` from a workflow view to pause live refresh before selecting terminal text
 - press `c` to copy the selected node content, or `e` to copy workflow activity
 - write the request for the agents
-- choose a Gemini model
+- choose a provider, CTO model, and Developer model
 - confirm the current repository branch
 - set the validation command for that repository
 - press `Run`
@@ -79,6 +112,8 @@ Runs are stored outside the source repository by default:
 ```
 
 Each run stores state, lifecycle events, node reports, live provider logs, structured results, stop requests, and isolated repository clones.
+
+The Codex provider runs `codex exec` with `--dangerously-bypass-approvals-and-sandbox`, matching the autonomous workflow mode. Use it only in repositories and environments where that level of access is acceptable.
 
 The validation node runs a configurable shell command in a fresh clone of the developer branch. The default is:
 

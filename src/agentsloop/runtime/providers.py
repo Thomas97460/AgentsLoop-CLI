@@ -6,7 +6,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from agentsloop.domain.models import GeminiModel, ProviderName
+from agentsloop.domain.models import (
+    DEFAULT_CODEX_REASONING_EFFORT,
+    ProviderModel,
+    ProviderName,
+    ReasoningEffort,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,24 +27,51 @@ class ProviderExecution:
     """Completed provider execution metadata."""
 
     returncode: int
+    report_md: str | None = None
 
 
 def build_provider_command(
     provider: ProviderName,
-    model: GeminiModel,
+    model: ProviderModel,
     prompt_md: str,
+    *,
+    reasoning_effort: ReasoningEffort | None = None,
+    output_path: Path | None = None,
 ) -> ProviderCommand:
     """Build the full-access command for one supported provider."""
     if provider == "gemini":
         return ProviderCommand(
             ["gemini", "--model", model, "--yolo", "--output-format", "text", "--prompt", prompt_md]
         )
+    if provider == "codex":
+        if output_path is None:
+            raise ValueError("Codex provider requires an output_path for the last message")
+        effort = reasoning_effort or DEFAULT_CODEX_REASONING_EFFORT
+        return ProviderCommand(
+            [
+                "codex",
+                "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--model",
+                model,
+                "-c",
+                f'model_reasoning_effort="{effort}"',
+                "--color",
+                "never",
+                "--output-last-message",
+                str(output_path),
+                "-",
+            ],
+            stdin=prompt_md,
+        )
+    raise ValueError(f"Unsupported provider: {provider}")
 
 
 def run_provider(
     *,
     provider: ProviderName,
-    model: GeminiModel,
+    model: ProviderModel,
+    reasoning_effort: ReasoningEffort | None = None,
     prompt_md: str,
     cwd: Path,
     env: dict[str, str],
@@ -47,9 +79,18 @@ def run_provider(
     stderr_path: Path,
 ) -> ProviderExecution:
     """Execute one provider command and stream output directly to artifacts."""
-    command = build_provider_command(provider, model, prompt_md)
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    last_message_path = stdout_path.parent / "last-message.md"
+    command = build_provider_command(
+        provider,
+        model,
+        prompt_md,
+        reasoning_effort=reasoning_effort,
+        output_path=last_message_path if provider == "codex" else None,
+    )
+    if provider == "codex" and last_message_path.exists():
+        last_message_path.unlink()
     with (
         stdout_path.open("w", encoding="utf-8") as stdout,
         stderr_path.open("w", encoding="utf-8") as stderr,
@@ -64,4 +105,7 @@ def run_provider(
             text=True,
         )
         process.communicate(command.stdin)
-    return ProviderExecution(returncode=process.returncode)
+    report_md = None
+    if provider == "codex" and last_message_path.exists():
+        report_md = last_message_path.read_text(encoding="utf-8").strip() or None
+    return ProviderExecution(returncode=process.returncode, report_md=report_md)

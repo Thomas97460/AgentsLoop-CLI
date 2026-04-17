@@ -39,7 +39,10 @@ Your objective is to get the human request executed correctly through the develo
 
 # Runtime Context
 - developer_binary: {{developer_binary}}
+- cto_model: {{cto_model}}
+- cto_reasoning_effort: {{cto_reasoning_effort}}
 - developer_model: {{developer_model}}
+- developer_reasoning_effort: {{developer_reasoning_effort}}
 - loop_count: {{loop_count}}
 
 # Rules (Strict)

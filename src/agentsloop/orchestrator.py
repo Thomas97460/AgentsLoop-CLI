@@ -40,7 +40,7 @@ def run_workflow(
     event_sink: EventSink | None = None,
     runs_dir: Path | None = None,
 ) -> WorkflowState:
-    """Run the real Gemini-backed CTO/developer loop."""
+    """Run the real provider-backed CTO/developer loop."""
     store = RunStore(runs_dir or runs_root(), event_sink=event_sink)
     state = _load_or_create_state(
         store=store,
@@ -55,7 +55,10 @@ def run_workflow(
         "run_started",
         task_id=state.task_id,
         provider=config.provider,
-        model=config.model,
+        cto_model=config.cto_model,
+        cto_reasoning_effort=config.cto_reasoning_effort,
+        developer_model=config.developer_model,
+        developer_reasoning_effort=config.developer_reasoning_effort,
     )
     try:
         while True:

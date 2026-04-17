@@ -7,7 +7,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from agentsloop.domain.models import GeminiModel, ProviderName, ProviderResult, utc_now
+from agentsloop.domain.models import (
+    ProviderModel,
+    ProviderName,
+    ProviderResult,
+    ReasoningEffort,
+    utc_now,
+)
 from agentsloop.runtime.git_runtime import clone_for_agent
 from agentsloop.runtime.providers import run_provider
 
@@ -19,7 +25,8 @@ class AgentRunSpec(BaseModel):
 
     role: str
     provider: ProviderName
-    model: GeminiModel
+    model: ProviderModel
+    reasoning_effort: ReasoningEffort | None = None
     prompt_md: str
     repo_url: str
     base_branch: str
@@ -48,17 +55,19 @@ def run_agent(spec: AgentRunSpec, task_id: str) -> ProviderResult:
     completed = run_provider(
         provider=spec.provider,
         model=spec.model,
+        reasoning_effort=spec.reasoning_effort,
         prompt_md=spec.prompt_md,
         cwd=repo_path,
         env=spec.env,
         stdout_path=spec.stdout_path,
         stderr_path=spec.stderr_path,
     )
-    report = spec.stdout_path.read_text(encoding="utf-8").strip()
+    report = completed.report_md or spec.stdout_path.read_text(encoding="utf-8").strip()
     return ProviderResult(
         provider=spec.provider,
         role=spec.role,
         model=spec.model,
+        reasoning_effort=spec.reasoning_effort,
         status="success" if completed.returncode == 0 and report else "error",
         report_md=report,
         stdout_path=str(spec.stdout_path),

@@ -6,13 +6,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
-ProviderName = Literal["gemini"]
+ProviderName = Literal["gemini", "codex"]
 WorkflowStatus = Literal["running", "stopping", "success", "error", "stopped"]
 NodeRole = Literal["cto", "developer", "validation"]
 NodeStatus = Literal["running", "success", "error", "stopped"]
+ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
 GeminiModel = Literal[
     "gemini-3.1-pro-preview",
     "gemini-3-flash-preview",
@@ -21,9 +22,21 @@ GeminiModel = Literal[
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
 ]
+CodexModel = Literal[
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.2",
+]
+ProviderModel = GeminiModel | CodexModel
 
+DEFAULT_PROVIDER: ProviderName = "gemini"
 DEFAULT_GEMINI_MODEL: GeminiModel = "gemini-3-flash-preview"
+DEFAULT_CODEX_MODEL: CodexModel = "gpt-5.4"
+DEFAULT_CODEX_REASONING_EFFORT: ReasoningEffort = "medium"
 DEFAULT_VALIDATION_COMMAND = 'echo "everything is fine here"'
+PROVIDERS: tuple[ProviderName, ...] = ("gemini", "codex")
+REASONING_EFFORTS: tuple[ReasoningEffort, ...] = ("low", "medium", "high", "xhigh")
 GEMINI_MODELS: tuple[GeminiModel, ...] = (
     "gemini-3.1-pro-preview",
     DEFAULT_GEMINI_MODEL,
@@ -32,6 +45,26 @@ GEMINI_MODELS: tuple[GeminiModel, ...] = (
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
 )
+CODEX_MODELS: tuple[CodexModel, ...] = (
+    DEFAULT_CODEX_MODEL,
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.2",
+)
+
+
+def models_for_provider(provider: ProviderName) -> tuple[ProviderModel, ...]:
+    """Return the curated model list for one provider."""
+    if provider == "gemini":
+        return GEMINI_MODELS
+    return CODEX_MODELS
+
+
+def default_model_for_provider(provider: ProviderName) -> ProviderModel:
+    """Return the default model for one provider."""
+    if provider == "gemini":
+        return DEFAULT_GEMINI_MODEL
+    return DEFAULT_CODEX_MODEL
 
 
 def utc_now() -> str:
@@ -44,13 +77,47 @@ class RuntimeConfig(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    provider: ProviderName = "gemini"
-    model: GeminiModel = DEFAULT_GEMINI_MODEL
+    provider: ProviderName = DEFAULT_PROVIDER
+    cto_model: ProviderModel = DEFAULT_GEMINI_MODEL
+    developer_model: ProviderModel = DEFAULT_GEMINI_MODEL
+    cto_reasoning_effort: ReasoningEffort = DEFAULT_CODEX_REASONING_EFFORT
+    developer_reasoning_effort: ReasoningEffort = DEFAULT_CODEX_REASONING_EFFORT
     repo_url: str
     ssh_key_path: Path | None = None
     base_branch: str = "main"
     loop_limit: int = Field(default=3, ge=1)
     validation_command: str = Field(default=DEFAULT_VALIDATION_COMMAND, min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_provider_default_models(cls, data: object) -> object:
+        """Default node models from the selected provider when omitted."""
+        if not isinstance(data, dict):
+            return data
+        fields = dict(data)
+        provider = fields.get("provider", DEFAULT_PROVIDER)
+        if provider not in PROVIDERS:
+            return fields
+        default_model = default_model_for_provider(provider)
+        if fields.get("cto_model") is None:
+            fields["cto_model"] = default_model
+        if fields.get("developer_model") is None:
+            fields["developer_model"] = default_model
+        return fields
+
+    @model_validator(mode="after")
+    def validate_provider_models(self) -> RuntimeConfig:
+        """Reject node models that do not belong to the selected provider."""
+        provider_models = models_for_provider(self.provider)
+        invalid_models = [
+            model
+            for model in (self.cto_model, self.developer_model)
+            if model not in provider_models
+        ]
+        if invalid_models:
+            msg = f"models {invalid_models!r} are not supported by provider {self.provider!r}"
+            raise ValueError(msg)
+        return self
 
 
 class WorkflowEvent(BaseModel):
@@ -66,7 +133,8 @@ class ProviderResult(BaseModel):
 
     provider: ProviderName
     role: str
-    model: GeminiModel
+    model: ProviderModel
+    reasoning_effort: ReasoningEffort | None = None
     status: Literal["success", "error"]
     report_md: str
     stdout_path: str
@@ -88,7 +156,9 @@ class NodeRun(BaseModel):
     status: NodeStatus
     started_at: str
     finished_at: str | None = None
-    model: GeminiModel | None = None
+    provider: ProviderName | None = None
+    model: ProviderModel | None = None
+    reasoning_effort: ReasoningEffort | None = None
     prompt_path: Path | None = None
     report_path: Path
     result_path: Path
@@ -155,6 +225,7 @@ class RunSummary(BaseModel):
     task_id: str
     application: str
     repo_url: str
+    provider: ProviderName
     status: WorkflowStatus
     approval_status: str
     created_at: str

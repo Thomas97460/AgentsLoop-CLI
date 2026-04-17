@@ -41,6 +41,12 @@ def build_validation_summary(state: WorkflowState) -> str:
 
 def build_prompt(state: WorkflowState, prompts_dir: Path) -> str:
     """Render the CTO prompt for the current state."""
+    cto_reasoning_effort = (
+        state.config.cto_reasoning_effort if state.config.provider == "codex" else "_none_"
+    )
+    developer_reasoning_effort = (
+        state.config.developer_reasoning_effort if state.config.provider == "codex" else "_none_"
+    )
     return render_template(
         prompts_dir / "cto_prompt.md",
         {
@@ -49,7 +55,10 @@ def build_prompt(state: WorkflowState, prompts_dir: Path) -> str:
             "base_branch": state.config.base_branch,
             "developer_branch": state.developer_branch,
             "developer_binary": state.config.provider,
-            "developer_model": state.config.model,
+            "cto_model": state.config.cto_model,
+            "cto_reasoning_effort": cto_reasoning_effort,
+            "developer_model": state.config.developer_model,
+            "developer_reasoning_effort": developer_reasoning_effort,
             "loop_count": state.loop_count,
             "loop_limit": state.config.loop_limit,
             "human_request_md": state.human_request_md,
@@ -119,18 +128,24 @@ def run_cto(
     """Execute one CTO pass."""
     ensure_developer_branch(state)
     prompt_md = build_prompt(state, prompts_dir)
+    reasoning_effort = (
+        state.config.cto_reasoning_effort if state.config.provider == "codex" else None
+    )
     node_run = store.start_node(
         state,
         role="cto",
         iteration=state.loop_count,
-        model=state.config.model,
+        provider=state.config.provider,
+        model=state.config.cto_model,
+        reasoning_effort=reasoning_effort,
         prompt_md=prompt_md,
     )
     result = run_agent(
         AgentRunSpec(
             role="cto",
             provider=state.config.provider,
-            model=state.config.model,
+            model=state.config.cto_model,
+            reasoning_effort=reasoning_effort,
             prompt_md=prompt_md,
             repo_url=state.config.repo_url,
             base_branch=state.config.base_branch,

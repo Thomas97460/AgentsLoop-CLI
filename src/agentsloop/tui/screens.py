@@ -30,13 +30,19 @@ from textual.widgets import (
 )
 
 from agentsloop.domain.models import (
-    DEFAULT_GEMINI_MODEL,
+    DEFAULT_CODEX_REASONING_EFFORT,
+    DEFAULT_PROVIDER,
     DEFAULT_VALIDATION_COMMAND,
-    GEMINI_MODELS,
-    GeminiModel,
+    PROVIDERS,
+    REASONING_EFFORTS,
     NodeRun,
+    ProviderModel,
+    ProviderName,
+    ReasoningEffort,
     RuntimeConfig,
     WorkflowState,
+    default_model_for_provider,
+    models_for_provider,
 )
 from agentsloop.project_config import ProjectContext
 from agentsloop.runtime.git_runtime import (
@@ -391,7 +397,9 @@ class LaunchScreen(Screen[None]):
         """Set screen title and fetch remote branches on mount."""
         self.app.title = "New Workflow"
         self.app.sub_title = str(self.project_context.repo_root)
-        self.run_worker(self._fetch_branches())
+        self._refresh_reasoning_controls(DEFAULT_PROVIDER)
+        if self.project_context.remote_url:
+            self.run_worker(self._fetch_branches())
 
     async def _fetch_branches(self) -> None:
         """Fetch remote branches in the background."""
@@ -430,13 +438,55 @@ class LaunchScreen(Screen[None]):
                         id="base_branch",
                         prompt="Select base branch",
                     )
-                    yield Label("GEMINI MODEL", classes="field-label")
-                    yield Select[GeminiModel](
-                        [(model, model) for model in GEMINI_MODELS],
-                        value=DEFAULT_GEMINI_MODEL,
+                    yield Label("PROVIDER", classes="field-label")
+                    yield Select[ProviderName](
+                        [(provider, provider) for provider in PROVIDERS],
+                        value=DEFAULT_PROVIDER,
                         allow_blank=False,
-                        id="model",
-                        prompt="Select Model",
+                        id="provider",
+                        prompt="Select Provider",
+                    )
+                    yield Label("CTO MODEL", classes="field-label")
+                    yield Select[ProviderModel](
+                        [(model, model) for model in models_for_provider(DEFAULT_PROVIDER)],
+                        value=default_model_for_provider(DEFAULT_PROVIDER),
+                        allow_blank=False,
+                        id="cto_model",
+                        prompt="Select CTO model",
+                    )
+                    yield Label("DEVELOPER MODEL", classes="field-label")
+                    yield Select[ProviderModel](
+                        [(model, model) for model in models_for_provider(DEFAULT_PROVIDER)],
+                        value=default_model_for_provider(DEFAULT_PROVIDER),
+                        allow_blank=False,
+                        id="developer_model",
+                        prompt="Select developer model",
+                    )
+                    yield Label(
+                        "CTO REASONING",
+                        id="cto_reasoning_label",
+                        classes="field-label codex-reasoning",
+                    )
+                    yield Select[ReasoningEffort](
+                        [(effort, effort) for effort in REASONING_EFFORTS],
+                        value=DEFAULT_CODEX_REASONING_EFFORT,
+                        allow_blank=False,
+                        id="cto_reasoning_effort",
+                        classes="codex-reasoning",
+                        prompt="Select CTO reasoning",
+                    )
+                    yield Label(
+                        "DEVELOPER REASONING",
+                        id="developer_reasoning_label",
+                        classes="field-label codex-reasoning",
+                    )
+                    yield Select[ReasoningEffort](
+                        [(effort, effort) for effort in REASONING_EFFORTS],
+                        value=DEFAULT_CODEX_REASONING_EFFORT,
+                        allow_blank=False,
+                        id="developer_reasoning_effort",
+                        classes="codex-reasoning",
+                        prompt="Select developer reasoning",
                     )
                     yield Label("VALIDATION COMMAND", classes="field-label")
                     yield Input(
@@ -464,9 +514,21 @@ class LaunchScreen(Screen[None]):
         if not request:
             self.notify("Request is required", severity="error")
             return
-        model = self._selected_model()
+        provider = self._selected_provider()
+        if provider is None:
+            return
+        cto_model = self._selected_model(provider, "#cto_model")
+        developer_model = self._selected_model(provider, "#developer_model")
+        cto_reasoning_effort = self._selected_reasoning_effort("#cto_reasoning_effort")
+        developer_reasoning_effort = self._selected_reasoning_effort("#developer_reasoning_effort")
         loop_limit = self._loop_limit()
-        if model is None or loop_limit is None:
+        if (
+            cto_model is None
+            or developer_model is None
+            or cto_reasoning_effort is None
+            or developer_reasoning_effort is None
+            or loop_limit is None
+        ):
             return
         validation_command = self.query_one("#validation_command", Input).value.strip()
         if not validation_command:
@@ -481,7 +543,11 @@ class LaunchScreen(Screen[None]):
             return
 
         config = RuntimeConfig(
-            model=model,
+            provider=provider,
+            cto_model=cto_model,
+            developer_model=developer_model,
+            cto_reasoning_effort=cto_reasoning_effort,
+            developer_reasoning_effort=developer_reasoning_effort,
             repo_url=repo_url,
             ssh_key_path=self.project_context.ssh_key_path,
             base_branch=(
@@ -500,13 +566,53 @@ class LaunchScreen(Screen[None]):
         )
         self.app.push_screen(WorkflowScreen(self.store, launch.task_id))
 
-    def _selected_model(self) -> GeminiModel | None:
-        """Return the selected model after UI validation."""
-        value = self.query_one("#model", Select).value
-        if value not in GEMINI_MODELS:
-            self.notify("Select a supported Gemini model", severity="error")
+    @on(Select.Changed, "#provider")
+    def on_provider_changed(self, event: Select.Changed) -> None:
+        """Refresh model choices for the selected provider."""
+        if event.value not in PROVIDERS:
+            return
+        provider = cast(ProviderName, event.value)
+        self._refresh_model_select("#cto_model", provider)
+        self._refresh_model_select("#developer_model", provider)
+        self._refresh_reasoning_controls(provider)
+
+    def _refresh_model_select(self, select_id: str, provider: ProviderName) -> None:
+        """Refresh one model selector for the selected provider."""
+        model_select = self.query_one(select_id, Select)
+        model_select.set_options([(model, model) for model in models_for_provider(provider)])
+        model_select.value = default_model_for_provider(provider)
+
+    def _refresh_reasoning_controls(self, provider: ProviderName) -> None:
+        """Show Codex reasoning controls only when Codex is selected."""
+        hidden = provider != "codex"
+        for widget in self.query(".codex-reasoning"):
+            widget.set_class(hidden, "hidden")
+        self.query_one("#cto_reasoning_effort", Select).disabled = hidden
+        self.query_one("#developer_reasoning_effort", Select).disabled = hidden
+
+    def _selected_provider(self) -> ProviderName | None:
+        """Return the selected provider after UI validation."""
+        value = self.query_one("#provider", Select).value
+        if value not in PROVIDERS:
+            self.notify("Select a supported provider", severity="error")
             return None
-        return cast(GeminiModel, value)
+        return cast(ProviderName, value)
+
+    def _selected_model(self, provider: ProviderName, select_id: str) -> ProviderModel | None:
+        """Return the selected model after UI validation."""
+        value = self.query_one(select_id, Select).value
+        if value not in models_for_provider(provider):
+            self.notify(f"Select a supported {provider} model", severity="error")
+            return None
+        return cast(ProviderModel, value)
+
+    def _selected_reasoning_effort(self, select_id: str) -> ReasoningEffort | None:
+        """Return the selected Codex reasoning effort after UI validation."""
+        value = self.query_one(select_id, Select).value
+        if value not in REASONING_EFFORTS:
+            self.notify("Select a supported Codex reasoning effort", severity="error")
+            return None
+        return cast(ReasoningEffort, value)
 
     def _loop_limit(self) -> int | None:
         """Return the loop limit after UI validation."""
@@ -729,6 +835,8 @@ class WorkflowScreen(Screen[None]):
             status,
             ("  ", "dim"),
             (f"loop {state.loop_count}/{state.config.loop_limit}", "dim"),
+            ("  ", "dim"),
+            (state.config.provider, "#f0a35a"),
             ("  ", "dim"),
             (
                 "paused" if self._refresh_paused else "live",

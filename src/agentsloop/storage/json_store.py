@@ -4,20 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import orjson
 
 from agentsloop.domain.models import (
-    GeminiModel,
+    PROVIDERS,
     JsonValue,
     NodeRole,
     NodeRun,
     NodeStatus,
+    ProviderModel,
+    ProviderName,
+    ReasoningEffort,
     RunSummary,
     WorkflowEvent,
     WorkflowState,
+    default_model_for_provider,
+    models_for_provider,
     utc_now,
 )
 
@@ -44,6 +49,50 @@ def application_name_from_repo_url(repo_url: str) -> str:
         path = Path(url).name
     clean = path.removesuffix(".git")
     return clean or url
+
+
+def load_workflow_state(path: Path) -> WorkflowState:
+    """Load persisted workflow state, repairing obsolete display-only model values."""
+    payload = orjson.loads(path.read_bytes())
+    if isinstance(payload, dict):
+        sanitize_workflow_state_payload(payload)
+    return WorkflowState.model_validate(payload)
+
+
+def sanitize_workflow_state_payload(payload: dict[str, Any]) -> None:
+    """Normalize obsolete provider model slugs in old run artifacts."""
+    config = payload.get("config")
+    config_provider = _provider_from_mapping(config)
+    if isinstance(config, dict) and config_provider is not None:
+        _sanitize_model_field(config, "cto_model", config_provider)
+        _sanitize_model_field(config, "developer_model", config_provider)
+
+    node_runs = payload.get("node_runs")
+    if not isinstance(node_runs, list):
+        return
+    for node in node_runs:
+        if isinstance(node, dict):
+            provider = _provider_from_mapping(node) or config_provider
+            if provider is not None:
+                _sanitize_model_field(node, "model", provider)
+
+
+def _provider_from_mapping(value: object) -> ProviderName | None:
+    """Read a provider name from a raw persisted object."""
+    if not isinstance(value, dict):
+        return None
+    provider = value.get("provider")
+    if provider not in PROVIDERS:
+        return None
+    return cast(ProviderName, provider)
+
+
+def _sanitize_model_field(payload: dict[str, Any], field: str, provider: ProviderName) -> None:
+    """Replace a stale model slug with the current provider default."""
+    model = payload.get(field)
+    if model is None or model in models_for_provider(provider):
+        return
+    payload[field] = default_model_for_provider(provider)
 
 
 class RunStore:
@@ -104,7 +153,9 @@ class RunStore:
         *,
         role: NodeRole,
         iteration: int,
-        model: GeminiModel | None,
+        provider: ProviderName | None = None,
+        model: ProviderModel | None,
+        reasoning_effort: ReasoningEffort | None = None,
         prompt_md: str | None = None,
     ) -> NodeRun:
         """Create and record the artifact envelope for one node execution."""
@@ -121,7 +172,9 @@ class RunStore:
             iteration=iteration,
             status="running",
             started_at=utc_now(),
+            provider=provider,
             model=model,
+            reasoning_effort=reasoning_effort,
             prompt_path=prompt_path,
             report_path=base / "report.md",
             result_path=base / "result.json",
@@ -136,7 +189,9 @@ class RunStore:
             "node_started",
             node=role,
             iteration=iteration,
+            provider=provider,
             model=model,
+            reasoning_effort=reasoning_effort,
             repo_path=str(repo_path),
         )
         return node_run
@@ -268,6 +323,9 @@ class RunStore:
         """Write the final Markdown summary."""
         node_lines = [
             f"- {node.role} #{node.iteration}: {node.status}"
+            + (f" [{node.provider}]" if node.provider else "")
+            + (f" {node.model}" if node.model else "")
+            + (f" ({node.reasoning_effort})" if node.reasoning_effort else "")
             + (f" (exit {node.exit_code})" if node.exit_code is not None else "")
             for node in state.node_runs
         ]
@@ -280,6 +338,11 @@ class RunStore:
                     f"- task_id: {state.task_id}",
                     f"- status: {state.status}",
                     f"- approval_status: {state.approval_status}",
+                    f"- provider: {state.config.provider}",
+                    f"- cto_model: {state.config.cto_model}",
+                    f"- cto_reasoning_effort: {state.config.cto_reasoning_effort}",
+                    f"- developer_model: {state.config.developer_model}",
+                    f"- developer_reasoning_effort: {state.config.developer_reasoning_effort}",
                     f"- loop_count: {state.loop_count}/{state.config.loop_limit}",
                     f"- validation_command: {state.config.validation_command}",
                     f"- developer_branch: {state.developer_branch or '_none_'}",
@@ -305,18 +368,19 @@ class RunStore:
     def load_state(self, task_id: str) -> WorkflowState:
         """Load one workflow state by run identifier."""
         path = self.runs_dir / task_id / "state.json"
-        return WorkflowState.model_validate_json(path.read_text(encoding="utf-8"))
+        return load_workflow_state(path)
 
     def list_runs(self) -> list[RunSummary]:
         """Return all known runs, newest first."""
         summaries: list[RunSummary] = []
         for state_path in self.runs_dir.glob("*/state.json"):
-            state = WorkflowState.model_validate_json(state_path.read_text(encoding="utf-8"))
+            state = load_workflow_state(state_path)
             summaries.append(
                 RunSummary(
                     task_id=state.task_id,
                     application=application_name_from_repo_url(state.config.repo_url),
                     repo_url=state.config.repo_url,
+                    provider=state.config.provider,
                     status=state.status,
                     approval_status=state.approval_status,
                     created_at=state.created_at,

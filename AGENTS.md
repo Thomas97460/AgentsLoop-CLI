@@ -1,7 +1,7 @@
 # AgentsLoop CLI Agent Instructions
 
-AgentsLoop CLI is a Python CLI/TUI for orchestrating agent loops. The first supported
-provider is Gemini CLI; the runtime should remain structured so future providers can be
+AgentsLoop CLI is a Python CLI/TUI for orchestrating agent loops. The active providers are
+Gemini CLI and Codex CLI; the runtime should remain structured so future providers can be
 added without rewriting the user-facing workflow.
 
 ## Core Product Rules
@@ -10,7 +10,7 @@ added without rewriting the user-facing workflow.
 - Nix is only an optional development shell.
 - The current workflow is a three-node loop: CTO, Developer, Validation / Tests.
 - The validation node must stay configurable per repository.
-- Gemini is the only active provider for now. Keep provider-specific behavior behind
+- Gemini and Codex are the active providers for now. Keep provider-specific behavior behind
   `agentsloop.runtime.providers`.
 - Prompt changes belong in `src/agentsloop/prompts`.
 - TUI changes should preserve clear keyboard navigation, readable labels, and compact
@@ -82,7 +82,7 @@ Add or update tests when behavior changes. Prefer focused tests around:
 - Git/SSH environment behavior
 - validation command behavior
 
-Do not require live Gemini calls or network access in unit tests.
+Do not require live Gemini/Codex calls or network access in unit tests.
 
 Tests may be more pragmatic than runtime code; the project allows common test patterns such
 as magic values and local imports in tests.

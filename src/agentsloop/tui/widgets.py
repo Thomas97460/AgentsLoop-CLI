@@ -140,14 +140,15 @@ def status_text(status: str) -> Text:
 def populate_runs_table(table: DataTable[str], runs: list[RunSummary]) -> None:
     """Fill a runs table with compact workflow metadata."""
     table.clear(columns=True)
-    for column in ("APPLICATION / WORKFLOW", "STATUS", "LOOPS", "UPDATED", "REQUEST"):
+    for column in ("APPLICATION / WORKFLOW", "STATUS", "PROVIDER", "LOOPS", "UPDATED", "REQUEST"):
         table.add_column(column)
 
     for index, (application, app_runs) in enumerate(_group_runs_by_application(runs).items()):
         if index > 0:
-            table.add_row("", "", "", "", "", key=f"spacer:app:{application}")
+            table.add_row("", "", "", "", "", "", key=f"spacer:app:{application}")
         table.add_row(
             f"[bold $primary]{application}[/]",
+            "",
             "",
             "",
             _workflow_count_label(len(app_runs)),
@@ -159,6 +160,7 @@ def populate_runs_table(table: DataTable[str], runs: list[RunSummary]) -> None:
             table.add_row(
                 f"  {run.task_id[:8]}",
                 status.markup,
+                run.provider,
                 str(run.loop_count),
                 _compact_timestamp(run.updated_at),
                 run.request_preview.replace("\n", " ")[:60],
@@ -221,6 +223,7 @@ def populate_nodes_table(table: DataTable[str], nodes: list[NodeRun]) -> None:
     table.clear(columns=True)
     table.add_column("ITER")
     table.add_column("ROLE")
+    table.add_column("AGENT")
     table.add_column("STATUS")
     table.add_column("OUTPUT")
 
@@ -228,9 +231,10 @@ def populate_nodes_table(table: DataTable[str], nodes: list[NodeRun]) -> None:
     for node in nodes:
         if node.iteration != last_iteration:
             if last_iteration != -1:
-                table.add_row("", "", "", "", key=f"spacer:iteration:{node.iteration}")
+                table.add_row("", "", "", "", "", key=f"spacer:iteration:{node.iteration}")
             table.add_row(
                 f"[bold $primary on $surface] Iteration {node.iteration:02d} [/]",
+                "",
                 "",
                 "",
                 _iteration_node_count(nodes, node.iteration),
@@ -242,6 +246,7 @@ def populate_nodes_table(table: DataTable[str], nodes: list[NodeRun]) -> None:
         table.add_row(
             "",
             ROLE_LABELS[node.role],
+            _node_agent_label(node),
             status.markup,
             _node_output_label(node),
             key=f"{node.role}:{node.iteration}",
@@ -265,6 +270,17 @@ def _node_output_label(node: NodeRun) -> str:
     if node.stdout_path.exists() or node.stderr_path.exists():
         return "logs"
     return "-"
+
+
+def _node_agent_label(node: NodeRun) -> str:
+    """Return a compact provider/model label for one node."""
+    if node.provider is None:
+        return "-"
+    if node.model is None:
+        return node.provider
+    if node.reasoning_effort is None:
+        return f"{node.provider} / {node.model}"
+    return f"{node.provider} / {node.model} / {node.reasoning_effort}"
 
 
 def node_report_markdown(node: NodeRun) -> str | None:

@@ -13,6 +13,9 @@ The CTO defines the task and validates your result. The human request is the ove
 - repo_path: {{repo_path}}
 - base_branch: {{base_branch}}
 - working_branch: {{working_branch}}
+- provider: {{provider}}
+- developer_model: {{developer_model}}
+- developer_reasoning_effort: {{developer_reasoning_effort}}
 
 # Workflow Context
 - This branch was chosen for this task by the CTO.

@@ -12,6 +12,9 @@ from agentsloop.storage.json_store import RunStore
 
 def build_prompt(state: WorkflowState, prompts_dir: Path) -> str:
     """Render the developer prompt for the current CTO task."""
+    developer_reasoning_effort = (
+        state.config.developer_reasoning_effort if state.config.provider == "codex" else "_none_"
+    )
     return render_template(
         prompts_dir / "developer_prompt.md",
         {
@@ -19,6 +22,9 @@ def build_prompt(state: WorkflowState, prompts_dir: Path) -> str:
             "repo_path": "current working directory (isolated /repo clone)",
             "base_branch": state.config.base_branch,
             "working_branch": state.developer_branch,
+            "provider": state.config.provider,
+            "developer_model": state.config.developer_model,
+            "developer_reasoning_effort": developer_reasoning_effort,
             "human_request_md": state.human_request_md,
             "developer_task_md": state.cto_result.get("developer_task_md") or "_none_",
             "technical_summary": state.reports.get("technical_summary") or "_none_",
@@ -36,18 +42,24 @@ def run_developer(
     """Execute one developer pass."""
     iteration = state.loop_count + 1
     prompt_md = build_prompt(state, prompts_dir)
+    reasoning_effort = (
+        state.config.developer_reasoning_effort if state.config.provider == "codex" else None
+    )
     node_run = store.start_node(
         state,
         role="developer",
         iteration=iteration,
-        model=state.config.model,
+        provider=state.config.provider,
+        model=state.config.developer_model,
+        reasoning_effort=reasoning_effort,
         prompt_md=prompt_md,
     )
     result = run_agent(
         AgentRunSpec(
             role="developer",
             provider=state.config.provider,
-            model=state.config.model,
+            model=state.config.developer_model,
+            reasoning_effort=reasoning_effort,
             prompt_md=prompt_md,
             repo_url=state.config.repo_url,
             base_branch=state.config.base_branch,

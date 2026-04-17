@@ -1,4 +1,4 @@
-"""Tests for the Gemini agentic workflow TUI project."""
+"""Tests for the AgentsLoop agentic workflow TUI project."""
 
 from __future__ import annotations
 
@@ -12,14 +12,21 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 from textual.screen import Screen
-from textual.widgets import Input, Select
+from textual.widgets import Input, Label, Select
 from typer.testing import CliRunner
 
 from agentsloop.cli import cli
 from agentsloop.domain.models import (
+    CODEX_MODELS,
+    DEFAULT_CODEX_MODEL,
+    DEFAULT_CODEX_REASONING_EFFORT,
     DEFAULT_GEMINI_MODEL,
+    DEFAULT_PROVIDER,
     DEFAULT_VALIDATION_COMMAND,
+    REASONING_EFFORTS,
+    ProviderModel,
     ProviderResult,
+    ReasoningEffort,
     RuntimeConfig,
     WorkflowState,
     utc_now,
@@ -41,16 +48,23 @@ from agentsloop.runtime.providers import build_provider_command
 from agentsloop.runtime.templates import parse_approval_status, render_template, slugify
 from agentsloop.runtime.workflow_control import reconcile_workflow_state, request_workflow_stop
 from agentsloop.runtime.workflow_launcher import spawn_workflow_process
-from agentsloop.storage.json_store import RunStore, application_name_from_repo_url
+from agentsloop.storage.json_store import RunStore, application_name_from_repo_url, json_dumps
 from agentsloop.tui.app import WorkflowApp
 from agentsloop.tui.screens import HomeScreen, ProjectSetupScreen, SSHKeySelectionScreen
 from agentsloop.tui.widgets import workflow_events_plain_text
 
 
-def config(validation_command: str = DEFAULT_VALIDATION_COMMAND) -> RuntimeConfig:
-    """Build a minimal Gemini runtime config."""
+def config(
+    validation_command: str = DEFAULT_VALIDATION_COMMAND,
+    *,
+    cto_model: ProviderModel = DEFAULT_GEMINI_MODEL,
+    developer_model: ProviderModel = DEFAULT_GEMINI_MODEL,
+) -> RuntimeConfig:
+    """Build a minimal runtime config."""
     return RuntimeConfig(
         repo_url="git@example.com:x/y.git",
+        cto_model=cto_model,
+        developer_model=developer_model,
         ssh_key_path=Path("~/.ssh/id_rsa").expanduser(),
         base_branch="main",
         loop_limit=2,
@@ -58,13 +72,51 @@ def config(validation_command: str = DEFAULT_VALIDATION_COMMAND) -> RuntimeConfi
     )
 
 
-def test_runtime_config_uses_strict_gemini_models() -> None:
-    """Validate the default model and reject models outside the curated list."""
+def test_runtime_config_uses_strict_provider_models() -> None:
+    """Validate provider defaults and reject models outside each curated list."""
     runtime_config = config()
-    assert runtime_config.model == DEFAULT_GEMINI_MODEL
+    codex_config = RuntimeConfig(provider="codex", repo_url="git@example.com:x/y.git")
+    assert runtime_config.provider == DEFAULT_PROVIDER
+    assert runtime_config.cto_model == DEFAULT_GEMINI_MODEL
+    assert runtime_config.developer_model == DEFAULT_GEMINI_MODEL
+    assert codex_config.cto_model == DEFAULT_CODEX_MODEL
+    assert codex_config.developer_model == DEFAULT_CODEX_MODEL
+    assert codex_config.cto_reasoning_effort == DEFAULT_CODEX_REASONING_EFFORT
+    assert codex_config.developer_reasoning_effort == DEFAULT_CODEX_REASONING_EFFORT
+    assert CODEX_MODELS == (
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.2",
+    )
+    assert REASONING_EFFORTS == ("low", "medium", "high", "xhigh")
     assert runtime_config.validation_command == DEFAULT_VALIDATION_COMMAND
     with pytest.raises(ValidationError):
-        RuntimeConfig(repo_url="git@example.com:x/y.git", model=cast(Any, "gemini-test"))
+        RuntimeConfig(repo_url="git@example.com:x/y.git", cto_model=cast(Any, "gemini-test"))
+    with pytest.raises(ValidationError):
+        RuntimeConfig(
+            provider="gemini",
+            repo_url="git@example.com:x/y.git",
+            developer_model=DEFAULT_CODEX_MODEL,
+        )
+    with pytest.raises(ValidationError):
+        RuntimeConfig(
+            provider="codex",
+            repo_url="git@example.com:x/y.git",
+            cto_model=DEFAULT_GEMINI_MODEL,
+        )
+    with pytest.raises(ValidationError):
+        RuntimeConfig(
+            provider="codex",
+            repo_url="git@example.com:x/y.git",
+            cto_model=cast(Any, "gpt-5.1-codex-mini"),
+        )
+    with pytest.raises(ValidationError):
+        RuntimeConfig(
+            provider="codex",
+            repo_url="git@example.com:x/y.git",
+            cto_reasoning_effort=cast(Any, "extreme"),
+        )
 
 
 def test_runs_root_defaults_to_home_directory() -> None:
@@ -99,7 +151,7 @@ def test_cto_approval_parser_defaults_to_continue() -> None:
 
 
 def test_provider_command_uses_gemini_headless() -> None:
-    """Build the only active provider command."""
+    """Build the Gemini provider command."""
     command = build_provider_command("gemini", DEFAULT_GEMINI_MODEL, "prompt")
     assert command.args == [
         "gemini",
@@ -111,6 +163,34 @@ def test_provider_command_uses_gemini_headless() -> None:
         "--prompt",
         "prompt",
     ]
+    assert command.stdin is None
+
+
+def test_provider_command_uses_codex_exec_danger_mode(tmp_path: Path) -> None:
+    """Build the Codex non-interactive provider command."""
+    output_path = tmp_path / "last-message.md"
+    command = build_provider_command(
+        "codex",
+        DEFAULT_CODEX_MODEL,
+        "prompt",
+        reasoning_effort="xhigh",
+        output_path=output_path,
+    )
+    assert command.args == [
+        "codex",
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--model",
+        DEFAULT_CODEX_MODEL,
+        "-c",
+        'model_reasoning_effort="xhigh"',
+        "--color",
+        "never",
+        "--output-last-message",
+        str(output_path),
+        "-",
+    ]
+    assert command.stdin == "prompt"
 
 
 def test_env_uses_agents_ssh_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -256,6 +336,7 @@ def test_store_writes_node_artifacts_and_history(tmp_path: Path) -> None:
         state,
         role="cto",
         iteration=0,
+        provider=DEFAULT_PROVIDER,
         model=DEFAULT_GEMINI_MODEL,
         prompt_md="# Prompt",
     )
@@ -270,10 +351,42 @@ def test_store_writes_node_artifacts_and_history(tmp_path: Path) -> None:
     )
     assert loaded.node_runs[0].repo_path.name == "repo"
     assert store.read_events("run-1")[0].event == "node_started"
+    assert "provider=gemini" in workflow_events_plain_text(store.read_events("run-1"))
     assert "stdout" in store.read_node_log_tail(loaded.node_runs[0])
     assert "node_started" in workflow_events_plain_text(store.read_events("run-1"))
     assert store.list_runs()[0].task_id == "run-1"
     assert store.list_runs()[0].application == "x/y"
+    assert store.list_runs()[0].provider == DEFAULT_PROVIDER
+
+
+def test_store_reads_old_runs_with_obsolete_codex_models(tmp_path: Path) -> None:
+    """Keep the history screen usable when old run artifacts contain removed Codex slugs."""
+    state = run_state(tmp_path)
+    store = RunStore(tmp_path)
+    store.prepare(state)
+    store.start_node(
+        state,
+        role="cto",
+        iteration=0,
+        provider="codex",
+        model=DEFAULT_CODEX_MODEL,
+        reasoning_effort="low",
+    )
+    payload = cast(dict[str, Any], state.snapshot())
+    config_payload = cast(dict[str, Any], payload["config"])
+    config_payload["provider"] = "codex"
+    config_payload["cto_model"] = "gpt-5.1-codex-mini"
+    config_payload["developer_model"] = "gpt-5.1-codex-mini"
+    node_payload = cast(dict[str, Any], cast(list[Any], payload["node_runs"])[0])
+    node_payload["model"] = "gpt-5.1-codex-mini"
+    state_path = tmp_path / "run-1" / "state.json"
+    state_path.write_text(json_dumps(payload), encoding="utf-8")
+
+    loaded = store.load_state("run-1")
+    assert loaded.config.cto_model == DEFAULT_CODEX_MODEL
+    assert loaded.config.developer_model == DEFAULT_CODEX_MODEL
+    assert loaded.node_runs[0].model == DEFAULT_CODEX_MODEL
+    assert store.list_runs()[0].provider == "codex"
 
 
 def test_workflow_launcher_spawns_detached_worker(
@@ -355,9 +468,11 @@ def test_orchestrator_runs_with_stubbed_agents_and_validation(
         "# Controller\napproval_status: continue\n\n# Developer Task\nImplement.\n",
         "# Controller\napproval_status: done\n\n# Developer Task\n_none_\n",
     ]
+    model_calls: list[tuple[str, ProviderModel, ReasoningEffort | None]] = []
 
     def fake_run_agent(spec: AgentRunSpec, task_id: str) -> ProviderResult:
         del task_id
+        model_calls.append((spec.role, spec.model, spec.reasoning_effort))
         if spec.role == "cto":
             report = cto_reports.pop(0)
             # Ensure the branch field is present if needed for parsing
@@ -372,9 +487,10 @@ def test_orchestrator_runs_with_stubbed_agents_and_validation(
         else:
             report = "# Summary\nDone"
         return ProviderResult(
-            provider="gemini",
+            provider=spec.provider,
             role=spec.role,
             model=spec.model,
+            reasoning_effort=spec.reasoning_effort,
             status="success",
             report_md=report,
             stdout_path=str(spec.stdout_path),
@@ -413,12 +529,21 @@ def test_orchestrator_runs_with_stubbed_agents_and_validation(
 
     state = run_workflow(
         human_request_md="Build the thing",
-        config=config(validation_command="npm test"),
+        config=config(
+            validation_command="npm test",
+            cto_model="gemini-2.5-pro",
+            developer_model="gemini-2.5-flash",
+        ),
         task_id="run-1",
         runs_dir=tmp_path,
     )
     assert state.status == "success"
     assert [node.role for node in state.node_runs] == ["cto", "developer", "validation", "cto"]
+    assert model_calls == [
+        ("cto", "gemini-2.5-pro", None),
+        ("developer", "gemini-2.5-flash", None),
+        ("cto", "gemini-2.5-pro", None),
+    ]
     assert FakeProcess.last_command == ["bash", "-lc", "npm test"]
     validation = state.validation["validation"]
     assert isinstance(validation, dict)
@@ -556,10 +681,40 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
                 app.push_screen(HomeScreen(app.store, app.project_context))
                 await pilot.pause()
                 await pilot.press("n")
-                model_select = app.screen.query_one("#model", Select)
+                provider_select = app.screen.query_one("#provider", Select)
+                cto_model_select = app.screen.query_one("#cto_model", Select)
+                developer_model_select = app.screen.query_one("#developer_model", Select)
+                cto_reasoning_select = app.screen.query_one("#cto_reasoning_effort", Select)
+                cto_reasoning_label = app.screen.query_one("#cto_reasoning_label", Label)
+                developer_reasoning_select = app.screen.query_one(
+                    "#developer_reasoning_effort", Select
+                )
+                developer_reasoning_label = app.screen.query_one(
+                    "#developer_reasoning_label", Label
+                )
                 base_branch_select = app.screen.query_one("#base_branch", Select)
                 validation_command = app.screen.query_one("#validation_command", Input)
-                assert model_select.value == DEFAULT_GEMINI_MODEL
+                assert provider_select.value == DEFAULT_PROVIDER
+                assert cto_model_select.value == DEFAULT_GEMINI_MODEL
+                assert developer_model_select.value == DEFAULT_GEMINI_MODEL
+                assert cto_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
+                assert developer_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
+                assert cto_reasoning_select.disabled is True
+                assert developer_reasoning_select.disabled is True
+                assert cto_reasoning_label.has_class("hidden")
+                assert cto_reasoning_select.has_class("hidden")
+                assert developer_reasoning_label.has_class("hidden")
+                assert developer_reasoning_select.has_class("hidden")
+                provider_select.value = "codex"
+                await pilot.pause()
+                assert cto_model_select.value == DEFAULT_CODEX_MODEL
+                assert developer_model_select.value == DEFAULT_CODEX_MODEL
+                assert cto_reasoning_select.disabled is False
+                assert developer_reasoning_select.disabled is False
+                assert not cto_reasoning_label.has_class("hidden")
+                assert not cto_reasoning_select.has_class("hidden")
+                assert not developer_reasoning_label.has_class("hidden")
+                assert not developer_reasoning_select.has_class("hidden")
                 assert base_branch_select.value == "main"
                 assert validation_command.value == DEFAULT_VALIDATION_COMMAND
 
