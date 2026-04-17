@@ -59,12 +59,12 @@ def config(validation_command: str = DEFAULT_VALIDATION_COMMAND) -> RuntimeConfi
 
 
 def test_runtime_config_uses_strict_gemini_models() -> None:
-    """Validate the default model and reject models outside the curated list."""
+    """Validate the runtime config defaults and reject unsupported providers."""
     runtime_config = config()
-    assert runtime_config.model == DEFAULT_GEMINI_MODEL
+    assert runtime_config.provider == "gemini"
     assert runtime_config.validation_command == DEFAULT_VALIDATION_COMMAND
     with pytest.raises(ValidationError):
-        RuntimeConfig(repo_url="git@example.com:x/y.git", model=cast(Any, "gemini-test"))
+        RuntimeConfig(repo_url="git@example.com:x/y.git", provider=cast(Any, "openai"))
 
 
 def test_runs_root_defaults_to_home_directory() -> None:
@@ -528,8 +528,8 @@ def test_cli_accepts_ssh_key_option(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         assert context.ssh_key_path == ssh_key
 
 
-def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None:
-    """Instantiate the Textual shell and verify the model selector."""
+def test_textual_app_launch_screen_contains_required_fields(tmp_path: Path) -> None:
+    """Instantiate the Textual shell and verify the launch form fields."""
 
     async def run_app() -> None:
         app = WorkflowApp(
@@ -556,10 +556,8 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
                 app.push_screen(HomeScreen(app.store, app.project_context))
                 await pilot.pause()
                 await pilot.press("n")
-                model_select = app.screen.query_one("#model", Select)
                 base_branch_select = app.screen.query_one("#base_branch", Select)
                 validation_command = app.screen.query_one("#validation_command", Input)
-                assert model_select.value == DEFAULT_GEMINI_MODEL
                 assert base_branch_select.value == "main"
                 assert validation_command.value == DEFAULT_VALIDATION_COMMAND
 
