@@ -18,8 +18,10 @@ from typer.testing import CliRunner
 from agentsloop.cli import cli
 from agentsloop.domain.models import (
     CODEX_MODELS,
+    COPILOT_MODELS,
     DEFAULT_CODEX_MODEL,
     DEFAULT_CODEX_REASONING_EFFORT,
+    DEFAULT_COPILOT_MODEL,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_PROVIDER,
     DEFAULT_VALIDATION_COMMAND,
@@ -82,18 +84,32 @@ def test_runtime_config_uses_strict_provider_models() -> None:
     """Validate provider defaults and reject models outside each curated list."""
     runtime_config = config()
     codex_config = RuntimeConfig(provider="codex", repo_url="git@example.com:x/y.git")
+    copilot_config = RuntimeConfig(provider="copilot", repo_url="git@example.com:x/y.git")
     assert runtime_config.provider == DEFAULT_PROVIDER
     assert runtime_config.cto_model == DEFAULT_GEMINI_MODEL
     assert runtime_config.developer_model == DEFAULT_GEMINI_MODEL
     assert codex_config.cto_model == DEFAULT_CODEX_MODEL
     assert codex_config.developer_model == DEFAULT_CODEX_MODEL
+    assert copilot_config.cto_model == DEFAULT_COPILOT_MODEL
+    assert copilot_config.developer_model == DEFAULT_COPILOT_MODEL
     assert codex_config.cto_reasoning_effort == DEFAULT_CODEX_REASONING_EFFORT
     assert codex_config.developer_reasoning_effort == DEFAULT_CODEX_REASONING_EFFORT
+    assert copilot_config.cto_reasoning_effort == DEFAULT_CODEX_REASONING_EFFORT
+    assert copilot_config.developer_reasoning_effort == DEFAULT_CODEX_REASONING_EFFORT
     assert CODEX_MODELS == (
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5.3-codex",
         "gpt-5.2",
+    )
+    assert COPILOT_MODELS == (
+        "gpt-5.3-codex",
+        "gpt-5.2-codex",
+        "gpt-5.2",
+        "gpt-5.4-mini",
+        "gpt-5-mini",
+        "gpt-4.1",
+        "claude-haiku-4.5",
     )
     assert REASONING_EFFORTS == ("low", "medium", "high", "xhigh")
     assert runtime_config.validation_command == DEFAULT_VALIDATION_COMMAND
@@ -122,6 +138,12 @@ def test_runtime_config_uses_strict_provider_models() -> None:
             provider="codex",
             repo_url="git@example.com:x/y.git",
             cto_reasoning_effort=cast(Any, "extreme"),
+        )
+    with pytest.raises(ValidationError):
+        RuntimeConfig(
+            provider="copilot",
+            repo_url="git@example.com:x/y.git",
+            cto_model=DEFAULT_GEMINI_MODEL,
         )
 
 
@@ -197,6 +219,30 @@ def test_provider_command_uses_codex_exec_danger_mode(tmp_path: Path) -> None:
         "-",
     ]
     assert command.stdin == "prompt"
+
+
+def test_provider_command_uses_copilot_non_interactive_mode() -> None:
+    """Build the Copilot non-interactive provider command."""
+    command = build_provider_command(
+        "copilot",
+        DEFAULT_COPILOT_MODEL,
+        "prompt",
+        reasoning_effort="xhigh",
+    )
+    assert command.args == [
+        "copilot",
+        "--model",
+        DEFAULT_COPILOT_MODEL,
+        "--reasoning-effort",
+        "xhigh",
+        "--allow-all-tools",
+        "--no-ask-user",
+        "--no-color",
+        "-s",
+        "-p",
+        "prompt",
+    ]
+    assert command.stdin is None
 
 
 def test_env_uses_agents_ssh_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -826,68 +872,101 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
     """Instantiate the Textual shell and verify the model selector."""
 
     async def run_app() -> None:
-        app = WorkflowApp(
-            tmp_path,
-            ProjectContext(
-                repo_root=tmp_path, base_branch="main", ssh_key_path=tmp_path / "id_rsa"
-            ),
+        context = ProjectContext(
+            repo_root=tmp_path,
+            base_branch="main",
+            ssh_key_path=tmp_path / "id_rsa",
         )
-        original_push_screen = app.push_screen
-        with (
-            patch("agentsloop.tui.screens.verify_git_write_access"),
-            patch.object(WorkflowApp, "push_screen") as mock_push,
-        ):
+        app = WorkflowApp(tmp_path, context)
 
-            def side_effect(screen: object, **_kwargs: object) -> object:
-                if not isinstance(screen, (Screen, str)):
-                    return None
-                return original_push_screen(screen)
-
-            mock_push.side_effect = side_effect
-
-            async with app.run_test() as pilot:
-                # Bypass loading
-                app.push_screen(HomeScreen(app.store, app.project_context))
-                await pilot.pause()
-                await pilot.press("n")
-                provider_select = app.screen.query_one("#provider", Select)
-                cto_model_select = app.screen.query_one("#cto_model", Select)
-                developer_model_select = app.screen.query_one("#developer_model", Select)
-                cto_reasoning_select = app.screen.query_one("#cto_reasoning_effort", Select)
-                cto_reasoning_label = app.screen.query_one("#cto_reasoning_label", Label)
-                developer_reasoning_select = app.screen.query_one(
-                    "#developer_reasoning_effort", Select
-                )
-                developer_reasoning_label = app.screen.query_one(
-                    "#developer_reasoning_label", Label
-                )
-                base_branch_select = app.screen.query_one("#base_branch", Select)
-                validation_command = app.screen.query_one("#validation_command", Input)
-                assert provider_select.value == DEFAULT_PROVIDER
-                assert cto_model_select.value == DEFAULT_GEMINI_MODEL
-                assert developer_model_select.value == DEFAULT_GEMINI_MODEL
-                assert cto_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
-                assert developer_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
-                assert cto_reasoning_select.disabled is True
-                assert developer_reasoning_select.disabled is True
-                assert cto_reasoning_label.has_class("hidden")
-                assert cto_reasoning_select.has_class("hidden")
-                assert developer_reasoning_label.has_class("hidden")
-                assert developer_reasoning_select.has_class("hidden")
-                provider_select.value = "codex"
-                await pilot.pause()
-                assert cto_model_select.value == DEFAULT_CODEX_MODEL
-                assert developer_model_select.value == DEFAULT_CODEX_MODEL
-                assert cto_reasoning_select.disabled is False
-                assert developer_reasoning_select.disabled is False
-                assert not cto_reasoning_label.has_class("hidden")
-                assert not cto_reasoning_select.has_class("hidden")
-                assert not developer_reasoning_label.has_class("hidden")
-                assert not developer_reasoning_select.has_class("hidden")
-                assert base_branch_select.value == "main"
-                assert validation_command.value == DEFAULT_VALIDATION_COMMAND
+        async with app.run_test() as pilot:
+            app.push_screen(LaunchScreen(app.store, context))
+            await pilot.pause()
+            provider_select = app.screen.query_one("#provider", Select)
+            cto_model_select = app.screen.query_one("#cto_model", Select)
+            developer_model_select = app.screen.query_one("#developer_model", Select)
+            cto_reasoning_select = app.screen.query_one("#cto_reasoning_effort", Select)
+            cto_reasoning_label = app.screen.query_one("#cto_reasoning_label", Label)
+            developer_reasoning_select = app.screen.query_one(
+                "#developer_reasoning_effort", Select
+            )
+            developer_reasoning_label = app.screen.query_one(
+                "#developer_reasoning_label", Label
+            )
+            base_branch_select = app.screen.query_one("#base_branch", Select)
+            validation_command = app.screen.query_one("#validation_command", Input)
+            _assert_reasoning_controls(
+                provider_select=provider_select,
+                cto_model_select=cto_model_select,
+                developer_model_select=developer_model_select,
+                cto_reasoning_select=cto_reasoning_select,
+                cto_reasoning_label=cto_reasoning_label,
+                developer_reasoning_select=developer_reasoning_select,
+                developer_reasoning_label=developer_reasoning_label,
+                provider=DEFAULT_PROVIDER,
+                model=DEFAULT_GEMINI_MODEL,
+                hidden=True,
+            )
+            provider_select.value = "copilot"
+            await pilot.pause()
+            _assert_reasoning_controls(
+                provider_select=provider_select,
+                cto_model_select=cto_model_select,
+                developer_model_select=developer_model_select,
+                cto_reasoning_select=cto_reasoning_select,
+                cto_reasoning_label=cto_reasoning_label,
+                developer_reasoning_select=developer_reasoning_select,
+                developer_reasoning_label=developer_reasoning_label,
+                provider="copilot",
+                model=DEFAULT_COPILOT_MODEL,
+                hidden=False,
+            )
+            provider_select.value = "codex"
+            await pilot.pause()
+            _assert_reasoning_controls(
+                provider_select=provider_select,
+                cto_model_select=cto_model_select,
+                developer_model_select=developer_model_select,
+                cto_reasoning_select=cto_reasoning_select,
+                cto_reasoning_label=cto_reasoning_label,
+                developer_reasoning_select=developer_reasoning_select,
+                developer_reasoning_label=developer_reasoning_label,
+                provider="codex",
+                model=DEFAULT_CODEX_MODEL,
+                hidden=False,
+            )
+            assert base_branch_select.value == "main"
+            assert validation_command.value == DEFAULT_VALIDATION_COMMAND
+            app.exit()
 
     asyncio.run(run_app())
+
+
+def _assert_reasoning_controls(
+    *,
+    provider_select: Select[str],
+    cto_model_select: Select[str],
+    developer_model_select: Select[str],
+    cto_reasoning_select: Select[str],
+    cto_reasoning_label: Label,
+    developer_reasoning_select: Select[str],
+    developer_reasoning_label: Label,
+    provider: str,
+    model: str,
+    hidden: bool,
+) -> None:
+    """Assert provider-specific model and reasoning UI state."""
+    assert provider_select.value == provider
+    assert cto_model_select.value == model
+    assert developer_model_select.value == model
+    assert cto_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
+    assert developer_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
+    assert cto_reasoning_select.disabled is hidden
+    assert developer_reasoning_select.disabled is hidden
+    assert cto_reasoning_label.has_class("hidden") is hidden
+    assert cto_reasoning_select.has_class("hidden") is hidden
+    assert developer_reasoning_label.has_class("hidden") is hidden
+    assert developer_reasoning_select.has_class("hidden") is hidden
 
 
 def test_textual_app_ssh_key_selection_flow(
@@ -954,6 +1033,7 @@ def test_textual_app_ssh_key_selection_flow(
                 loaded = store.load()
                 assert loaded is not None
                 assert loaded.ssh_key_path == new_key
+                app.exit()
 
     asyncio.run(run_app())
 
@@ -994,6 +1074,7 @@ def test_textual_app_collects_first_run_validation_command(tmp_path: Path) -> No
                 assert isinstance(app.screen, HomeScreen)
                 assert context.validation_command == "npm test"
                 assert store.load() is not None
+                app.exit()
 
     asyncio.run(run_app())
 
@@ -1006,7 +1087,6 @@ def test_launch_screen_prefills_resume_form(tmp_path: Path) -> None:
             repo_root=tmp_path,
             base_branch="main",
             ssh_key_path=tmp_path / "id_rsa",
-            remote_url="git@example.com:x/y.git",
         )
         app = WorkflowApp(tmp_path / "runs", context)
         source = run_state(tmp_path)
@@ -1036,6 +1116,7 @@ def test_launch_screen_prefills_resume_form(tmp_path: Path) -> None:
             assert app.screen.query_one("#base_branch", Select).value == "develop"
             assert app.screen.query_one("#validation_command", Input).value == "pytest -q"
             assert app.screen.query_one("#loop_limit", Input).value == "5"
+            app.exit()
 
     asyncio.run(run_app())
 

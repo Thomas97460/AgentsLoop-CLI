@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
-ProviderName = Literal["gemini", "codex"]
+ProviderName = Literal["gemini", "codex", "copilot"]
 WorkflowStatus = Literal["running", "stopping", "success", "error", "stopped"]
 NodeRole = Literal["cto", "developer", "validation"]
 NodeStatus = Literal["running", "success", "error", "stopped"]
@@ -28,14 +28,24 @@ CodexModel = Literal[
     "gpt-5.3-codex",
     "gpt-5.2",
 ]
-ProviderModel = GeminiModel | CodexModel
+CopilotModel = Literal[
+    "gpt-5.3-codex",
+    "gpt-5.2-codex",
+    "gpt-5.2",
+    "gpt-5.4-mini",
+    "gpt-5-mini",
+    "gpt-4.1",
+    "claude-haiku-4.5",
+]
+ProviderModel = GeminiModel | CodexModel | CopilotModel
 
 DEFAULT_PROVIDER: ProviderName = "gemini"
 DEFAULT_GEMINI_MODEL: GeminiModel = "gemini-3-flash-preview"
 DEFAULT_CODEX_MODEL: CodexModel = "gpt-5.4"
+DEFAULT_COPILOT_MODEL: CopilotModel = "gpt-5.3-codex"
 DEFAULT_CODEX_REASONING_EFFORT: ReasoningEffort = "medium"
 DEFAULT_VALIDATION_COMMAND = 'echo "everything is fine here"'
-PROVIDERS: tuple[ProviderName, ...] = ("gemini", "codex")
+PROVIDERS: tuple[ProviderName, ...] = ("gemini", "codex", "copilot")
 REASONING_EFFORTS: tuple[ReasoningEffort, ...] = ("low", "medium", "high", "xhigh")
 GEMINI_MODELS: tuple[GeminiModel, ...] = (
     "gemini-3.1-pro-preview",
@@ -51,12 +61,23 @@ CODEX_MODELS: tuple[CodexModel, ...] = (
     "gpt-5.3-codex",
     "gpt-5.2",
 )
+COPILOT_MODELS: tuple[CopilotModel, ...] = (
+    DEFAULT_COPILOT_MODEL,
+    "gpt-5.2-codex",
+    "gpt-5.2",
+    "gpt-5.4-mini",
+    "gpt-5-mini",
+    "gpt-4.1",
+    "claude-haiku-4.5",
+)
 
 
 def models_for_provider(provider: ProviderName) -> tuple[ProviderModel, ...]:
     """Return the curated model list for one provider."""
     if provider == "gemini":
         return GEMINI_MODELS
+    if provider == "copilot":
+        return COPILOT_MODELS
     return CODEX_MODELS
 
 
@@ -64,6 +85,8 @@ def default_model_for_provider(provider: ProviderName) -> ProviderModel:
     """Return the default model for one provider."""
     if provider == "gemini":
         return DEFAULT_GEMINI_MODEL
+    if provider == "copilot":
+        return DEFAULT_COPILOT_MODEL
     return DEFAULT_CODEX_MODEL
 
 

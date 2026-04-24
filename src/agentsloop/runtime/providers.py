@@ -64,6 +64,23 @@ def build_provider_command(
             ],
             stdin=prompt_md,
         )
+    if provider == "copilot":
+        effort = reasoning_effort or DEFAULT_CODEX_REASONING_EFFORT
+        return ProviderCommand(
+            [
+                "copilot",
+                "--model",
+                model,
+                "--reasoning-effort",
+                effort,
+                "--allow-all-tools",
+                "--no-ask-user",
+                "--no-color",
+                "-s",
+                "-p",
+                prompt_md,
+            ]
+        )
     raise ValueError(f"Unsupported provider: {provider}")
 
 

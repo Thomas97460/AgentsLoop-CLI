@@ -75,11 +75,12 @@ def build_continuation_summary(state: WorkflowState) -> str:
 
 def build_prompt(state: WorkflowState, prompts_dir: Path, store: RunStore) -> str:
     """Render the CTO prompt for the current state."""
+    supports_reasoning = state.config.provider in {"codex", "copilot"}
     cto_reasoning_effort = (
-        state.config.cto_reasoning_effort if state.config.provider == "codex" else "_none_"
+        state.config.cto_reasoning_effort if supports_reasoning else "_none_"
     )
     developer_reasoning_effort = (
-        state.config.developer_reasoning_effort if state.config.provider == "codex" else "_none_"
+        state.config.developer_reasoning_effort if supports_reasoning else "_none_"
     )
     return render_template(
         prompts_dir / "cto_prompt.md",
@@ -167,8 +168,9 @@ def run_cto(
     prompt_md = build_prompt(state, prompts_dir, store)
     if pending_prompt_ids:
         store.mark_user_prompts_consumed(state, pending_prompt_ids)
+    supports_reasoning = state.config.provider in {"codex", "copilot"}
     reasoning_effort = (
-        state.config.cto_reasoning_effort if state.config.provider == "codex" else None
+        state.config.cto_reasoning_effort if supports_reasoning else None
     )
     node_run = store.start_node(
         state,

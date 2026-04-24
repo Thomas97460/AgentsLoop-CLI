@@ -1,16 +1,16 @@
 # AgentsLoop CLI
 
-AgentsLoop CLI launches and monitors an agent workflow around Gemini CLI or Codex CLI:
+AgentsLoop CLI launches and monitors an agent workflow around Gemini CLI, Codex CLI, or GitHub Copilot CLI:
 
 ```text
 CTO controller -> Developer agent -> Validation / tests -> CTO controller
 ```
 
-The project currently supports Gemini CLI and Codex CLI. The runtime is structured so other agent providers can be added later without changing the user-facing workflow.
+The project currently supports Gemini CLI, Codex CLI, and GitHub Copilot CLI. The runtime is structured so other agent providers can be added later without changing the user-facing workflow.
 
 ## Install
 
-AgentsLoop CLI requires Python 3.12 or newer and at least one authenticated provider command: `gemini` or `codex`. Gemini CLI requires Node.js 20 or newer when installed with npm.
+AgentsLoop CLI requires Python 3.12 or newer and at least one authenticated provider command: `gemini`, `codex`, or `copilot`. Gemini CLI requires Node.js 20 or newer when installed with npm.
 
 ### Install AgentsLoop With uv
 
@@ -76,6 +76,12 @@ Install and authenticate Codex CLI when you want to use the Codex provider:
 codex login
 ```
 
+Install and authenticate GitHub Copilot CLI when you want to use the Copilot provider:
+
+```bash
+copilot login
+```
+
 ## Use
 
 Start the TUI from inside the Git repository you want AgentsLoop to work on:
@@ -114,6 +120,8 @@ Runs are stored outside the source repository by default:
 Each run stores state, lifecycle events, node reports, live provider logs, structured results, stop requests, and isolated repository clones.
 
 The Codex provider runs `codex exec` with `--dangerously-bypass-approvals-and-sandbox`, matching the autonomous workflow mode. Use it only in repositories and environments where that level of access is acceptable.
+
+The Copilot provider runs `copilot` in non-interactive mode with automatic tool approval. Use it only in repositories and environments where autonomous file and shell actions are acceptable.
 
 The validation node runs a configurable shell command in a fresh clone of the developer branch. The default is:
 

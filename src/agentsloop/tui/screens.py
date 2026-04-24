@@ -516,27 +516,27 @@ class LaunchScreen(Screen[None]):
                     yield Label(
                         "CTO REASONING",
                         id="cto_reasoning_label",
-                        classes="field-label codex-reasoning",
+                        classes="field-label reasoning-provider",
                     )
                     yield Select[ReasoningEffort](
                         [(effort, effort) for effort in REASONING_EFFORTS],
                         value=default_cto_reasoning,
                         allow_blank=False,
                         id="cto_reasoning_effort",
-                        classes="codex-reasoning",
+                        classes="reasoning-provider",
                         prompt="Select CTO reasoning",
                     )
                     yield Label(
                         "DEVELOPER REASONING",
                         id="developer_reasoning_label",
-                        classes="field-label codex-reasoning",
+                        classes="field-label reasoning-provider",
                     )
                     yield Select[ReasoningEffort](
                         [(effort, effort) for effort in REASONING_EFFORTS],
                         value=default_developer_reasoning,
                         allow_blank=False,
                         id="developer_reasoning_effort",
-                        classes="codex-reasoning",
+                        classes="reasoning-provider",
                         prompt="Select developer reasoning",
                     )
                     yield Label("VALIDATION COMMAND", classes="field-label")
@@ -635,9 +635,9 @@ class LaunchScreen(Screen[None]):
         model_select.value = default_model_for_provider(provider)
 
     def _refresh_reasoning_controls(self, provider: ProviderName) -> None:
-        """Show Codex reasoning controls only when Codex is selected."""
-        hidden = provider != "codex"
-        for widget in self.query(".codex-reasoning"):
+        """Show reasoning controls only for providers that support them."""
+        hidden = provider not in {"codex", "copilot"}
+        for widget in self.query(".reasoning-provider"):
             widget.set_class(hidden, "hidden")
         self.query_one("#cto_reasoning_effort", Select).disabled = hidden
         self.query_one("#developer_reasoning_effort", Select).disabled = hidden
@@ -659,10 +659,10 @@ class LaunchScreen(Screen[None]):
         return cast(ProviderModel, value)
 
     def _selected_reasoning_effort(self, select_id: str) -> ReasoningEffort | None:
-        """Return the selected Codex reasoning effort after UI validation."""
+        """Return the selected reasoning effort after UI validation."""
         value = self.query_one(select_id, Select).value
         if value not in REASONING_EFFORTS:
-            self.notify("Select a supported Codex reasoning effort", severity="error")
+            self.notify("Select a supported reasoning effort", severity="error")
             return None
         return cast(ReasoningEffort, value)
 

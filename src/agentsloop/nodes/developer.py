@@ -12,8 +12,9 @@ from agentsloop.storage.json_store import RunStore
 
 def build_prompt(state: WorkflowState, prompts_dir: Path) -> str:
     """Render the developer prompt for the current CTO task."""
+    supports_reasoning = state.config.provider in {"codex", "copilot"}
     developer_reasoning_effort = (
-        state.config.developer_reasoning_effort if state.config.provider == "codex" else "_none_"
+        state.config.developer_reasoning_effort if supports_reasoning else "_none_"
     )
     return render_template(
         prompts_dir / "developer_prompt.md",
@@ -42,8 +43,9 @@ def run_developer(
     """Execute one developer pass."""
     iteration = state.loop_count + 1
     prompt_md = build_prompt(state, prompts_dir)
+    supports_reasoning = state.config.provider in {"codex", "copilot"}
     reasoning_effort = (
-        state.config.developer_reasoning_effort if state.config.provider == "codex" else None
+        state.config.developer_reasoning_effort if supports_reasoning else None
     )
     node_run = store.start_node(
         state,
