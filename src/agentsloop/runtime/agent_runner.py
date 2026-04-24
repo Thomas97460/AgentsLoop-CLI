@@ -63,6 +63,9 @@ def run_agent(spec: AgentRunSpec, task_id: str) -> ProviderResult:
         stderr_path=spec.stderr_path,
     )
     report = completed.report_md or spec.stdout_path.read_text(encoding="utf-8").strip()
+    stderr_text = spec.stderr_path.read_text(encoding="utf-8").strip()
+    if completed.returncode != 0 and not report and stderr_text:
+        report = stderr_text
     return ProviderResult(
         provider=spec.provider,
         role=spec.role,

@@ -29,6 +29,7 @@ CodexModel = Literal[
     "gpt-5.2",
 ]
 CopilotModel = Literal[
+    "auto",
     "gpt-5.3-codex",
     "gpt-5.2-codex",
     "gpt-5.2",
@@ -62,6 +63,7 @@ CODEX_MODELS: tuple[CodexModel, ...] = (
     "gpt-5.2",
 )
 COPILOT_MODELS: tuple[CopilotModel, ...] = (
+    "auto",
     DEFAULT_COPILOT_MODEL,
     "gpt-5.2-codex",
     "gpt-5.2",

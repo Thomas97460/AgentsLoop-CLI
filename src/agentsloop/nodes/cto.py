@@ -205,7 +205,11 @@ def run_cto(
     store.write_node_report(state, node_run, report_md)
     if result.status == "error":
         state.status = "error"
-        state.failure_message = f"CTO node failed with exit code {result.exit_code}"
+        summary = result.report_md.strip().splitlines()[0] if result.report_md.strip() else ""
+        if summary:
+            state.failure_message = f"CTO node failed: {summary}"
+        else:
+            state.failure_message = f"CTO node failed with exit code {result.exit_code}"
         store.finish_node(
             state,
             node_run,

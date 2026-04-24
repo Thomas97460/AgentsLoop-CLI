@@ -140,12 +140,31 @@ TextArea#request {
     height: 3;
     width: 100%;
     align: left middle;
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 
 #workflow-status {
     width: 1fr;
     height: 1;
+}
+
+#workflow-meta-bar {
+    height: 1;
+    width: 100%;
+    align: left middle;
+    margin-bottom: 1;
+}
+
+#workflow-branch {
+    width: 1fr;
+    height: 1;
+    color: $foreground 80%;
+}
+
+#copy-branch {
+    width: 8;
+    min-width: 8;
+    margin-left: 1;
 }
 
 #pause-refresh,

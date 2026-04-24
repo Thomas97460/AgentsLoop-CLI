@@ -746,6 +746,7 @@ class WorkflowScreen(Screen[None]):
         ("escape", "app.pop_screen", "Back"),
         ("r", "refresh", "Refresh"),
         ("p", "toggle_refresh", "Pause live"),
+        ("b", "copy_branch", "Copy branch"),
         ("c", "copy_current_node", "Copy node"),
         ("e", "copy_events", "Copy activity"),
         ("a", "add_user_prompt", "Add prompt"),
@@ -776,6 +777,9 @@ class WorkflowScreen(Screen[None]):
                 yield Button("Copy Node", id="copy-node")
                 yield Button("Copy Activity", id="copy-events")
                 yield Button("Stop", variant="error", id="stop-workflow")
+            with Horizontal(id="workflow-meta-bar"):
+                yield Static("", id="workflow-branch")
+                yield Button("Copy", id="copy-branch")
             with Horizontal(id="workflow-top"):
                 with Vertical(id="workflow-nodes-panel"):
                     yield Label("NODES", classes="table-title")
@@ -802,6 +806,7 @@ class WorkflowScreen(Screen[None]):
         try:
             state = reconcile_workflow_state(self.store, self.task_id)
             self._update_workflow_status(state)
+            self._update_branch_bar(state)
             nodes = state.node_runs
             nodes_hash = hash(str(nodes))
 
@@ -852,6 +857,11 @@ class WorkflowScreen(Screen[None]):
     def on_copy_events_pressed(self) -> None:
         """Copy workflow activity."""
         self.action_copy_events()
+
+    @on(Button.Pressed, "#copy-branch")
+    def on_copy_branch_pressed(self) -> None:
+        """Copy the developer branch name."""
+        self.action_copy_branch()
 
     @on(Button.Pressed, "#add-user-prompt")
     def on_add_user_prompt_pressed(self) -> None:
@@ -911,8 +921,7 @@ class WorkflowScreen(Screen[None]):
         except Exception:
             self.notify("Unable to copy node content", severity="error")
             return
-        self.app.copy_to_clipboard(content)
-        self.notify("Node content copied")
+        self._copy_text(content, "Node content copied")
 
     def action_copy_events(self) -> None:
         """Copy the workflow activity log."""
@@ -923,8 +932,20 @@ class WorkflowScreen(Screen[None]):
             return
         if not content:
             content = "No workflow activity."
-        self.app.copy_to_clipboard(content)
-        self.notify("Workflow activity copied")
+        self._copy_text(content, "Workflow activity copied")
+
+    def action_copy_branch(self) -> None:
+        """Copy the current developer branch name."""
+        try:
+            state = self.store.load_state(self.task_id)
+        except Exception:
+            self.notify("Unable to read workflow state", severity="error")
+            return
+        branch = state.developer_branch.strip()
+        if not branch:
+            self.notify("No developer branch yet", severity="warning")
+            return
+        self._copy_text(branch, "Developer branch copied")
 
     def action_add_user_prompt(self) -> None:
         """Open a form to queue an extra user prompt."""
@@ -1015,6 +1036,23 @@ class WorkflowScreen(Screen[None]):
             "stopping",
         }
         self._update_pause_button()
+
+    def _update_branch_bar(self, state: WorkflowState) -> None:
+        """Render the compact developer branch row."""
+        branch = state.developer_branch or "_not assigned yet_"
+        text = Text.assemble(
+            ("BRANCH ", "bold"),
+            (branch, "#88a7c7"),
+        )
+        text.no_wrap = True
+        text.overflow = "ellipsis"
+        self.query_one("#workflow-branch", Static).update(text)
+        self.query_one("#copy-branch", Button).disabled = not state.developer_branch
+
+    def _copy_text(self, content: str, notice: str) -> None:
+        """Copy text to the clipboard and notify the user."""
+        self.app.copy_to_clipboard(content)
+        self.notify(notice)
 
     def _selected_node(self, state: WorkflowState) -> NodeRun | None:
         """Return the selected node, falling back to the latest node."""

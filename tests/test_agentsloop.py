@@ -58,6 +58,7 @@ from agentsloop.tui.screens import (
     LaunchScreen,
     ProjectSetupScreen,
     SSHKeySelectionScreen,
+    WorkflowScreen,
 )
 from agentsloop.tui.widgets import workflow_events_plain_text
 
@@ -103,6 +104,7 @@ def test_runtime_config_uses_strict_provider_models() -> None:
         "gpt-5.2",
     )
     assert COPILOT_MODELS == (
+        "auto",
         "gpt-5.3-codex",
         "gpt-5.2-codex",
         "gpt-5.2",
@@ -145,6 +147,14 @@ def test_runtime_config_uses_strict_provider_models() -> None:
             repo_url="git@example.com:x/y.git",
             cto_model=DEFAULT_GEMINI_MODEL,
         )
+    copilot_auto_config = RuntimeConfig(
+        provider="copilot",
+        repo_url="git@example.com:x/y.git",
+        cto_model="auto",
+        developer_model="auto",
+    )
+    assert copilot_auto_config.cto_model == "auto"
+    assert copilot_auto_config.developer_model == "auto"
 
 
 def test_runs_root_defaults_to_home_directory() -> None:
@@ -235,6 +245,26 @@ def test_provider_command_uses_copilot_non_interactive_mode() -> None:
         DEFAULT_COPILOT_MODEL,
         "--reasoning-effort",
         "xhigh",
+        "--allow-all-tools",
+        "--no-ask-user",
+        "--no-color",
+        "-s",
+        "-p",
+        "prompt",
+    ]
+    assert command.stdin is None
+
+
+def test_provider_command_omits_copilot_auto_model_flag() -> None:
+    """Use Copilot automatic model selection when auto is requested."""
+    command = build_provider_command(
+        "copilot",
+        "auto",
+        "prompt",
+        reasoning_effort="xhigh",
+    )
+    assert command.args == [
+        "copilot",
         "--allow-all-tools",
         "--no-ask-user",
         "--no-color",
@@ -791,6 +821,49 @@ def test_orchestrator_marks_running_node_error_on_exception(
     assert state.failure_message == "provider crashed"
 
 
+def test_orchestrator_surfaces_provider_error_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Expose the provider error summary instead of only the exit code."""
+
+    def failing_run_agent(_spec: AgentRunSpec, _task_id: str) -> ProviderResult:
+        return ProviderResult(
+            provider="copilot",
+            role="cto",
+            model="auto",
+            reasoning_effort="medium",
+            status="error",
+            report_md="Sorry, you've hit a rate limit that restricts the number of Copilot model requests you can make within a specific time period.",
+            stdout_path="stdout.txt",
+            stderr_path="stderr.txt",
+            exit_code=1,
+            started_at=utc_now(),
+            finished_at=utc_now(),
+            repo_path=str(tmp_path / "repo"),
+            branch="main",
+        )
+
+    monkeypatch.setattr("agentsloop.nodes.cto.run_agent", failing_run_agent)
+    with pytest.raises(RuntimeError, match="rate limit"):
+        run_workflow(
+            human_request_md="Build the thing",
+            config=RuntimeConfig(
+                provider="copilot",
+                repo_url="git@example.com:x/y.git",
+                cto_model="auto",
+                developer_model="auto",
+            ),
+            task_id="run-1",
+            runs_dir=tmp_path,
+        )
+    state = RunStore(tmp_path).load_state("run-1")
+    assert state.status == "error"
+    assert (
+        state.failure_message
+        == "CTO node failed: Sorry, you've hit a rate limit that restricts the number of Copilot model requests you can make within a specific time period."
+    )
+
+
 def test_cli_exposes_only_tui_options() -> None:
     """Remove the old Rich command surface from the user-facing CLI."""
     runner = CliRunner()
@@ -1119,6 +1192,24 @@ def test_launch_screen_prefills_resume_form(tmp_path: Path) -> None:
             app.exit()
 
     asyncio.run(run_app())
+
+
+def test_workflow_screen_copies_developer_branch(tmp_path: Path) -> None:
+    """Copy the developer branch from the workflow screen."""
+    state = run_state(tmp_path)
+    state.developer_branch = "agent/dev/build-the-thing-run-1"
+    store = RunStore(tmp_path)
+    store.prepare(state)
+    copied: list[str] = []
+
+    class TestWorkflowScreen(WorkflowScreen):
+        def _copy_text(self, content: str, notice: str) -> None:
+            copied.append(content)
+            assert notice == "Developer branch copied"
+
+    screen = TestWorkflowScreen(store, state.task_id)
+    screen.action_copy_branch()
+    assert copied == ["agent/dev/build-the-thing-run-1"]
 
 
 def run_state(tmp_path: Path) -> WorkflowState:
