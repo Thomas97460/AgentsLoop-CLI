@@ -11,6 +11,7 @@ import orjson
 
 from agentsloop.domain.models import (
     PROVIDERS,
+    ContinuationContext,
     JsonValue,
     NodeRole,
     NodeRun,
@@ -19,6 +20,7 @@ from agentsloop.domain.models import (
     ProviderName,
     ReasoningEffort,
     RunSummary,
+    UserPrompt,
     WorkflowEvent,
     WorkflowState,
     default_model_for_provider,
@@ -139,9 +141,61 @@ class RunStore:
         self.event(state, "stop_requested", task_id=state.task_id, reason=reason, path=str(path))
         return path
 
+    def append_user_prompt(self, state: WorkflowState, content_md: str) -> UserPrompt:
+        """Queue one user prompt for the next CTO pass."""
+        prompt = UserPrompt(id=f"user-{len(state.user_prompts) + 1:03d}", content_md=content_md)
+        state.user_prompts.append(prompt)
+        self.save_state(state)
+        self.event(
+            state,
+            "user_prompt_added",
+            task_id=state.task_id,
+            prompt_id=prompt.id,
+            content_preview=content_md.replace("\n", " ")[:120],
+        )
+        return prompt
+
+    def pending_user_prompts(self, state: WorkflowState) -> list[UserPrompt]:
+        """Return user prompts not yet consumed by a CTO pass."""
+        return [prompt for prompt in state.user_prompts if prompt.consumed_at is None]
+
+    def mark_user_prompts_consumed(self, state: WorkflowState, prompt_ids: list[str]) -> None:
+        """Mark queued user prompts as consumed by the current CTO pass."""
+        consumed_ids: list[str] = []
+        consumed_at = utc_now()
+        for prompt in state.user_prompts:
+            if prompt.id not in prompt_ids or prompt.consumed_at is not None:
+                continue
+            prompt.consumed_at = consumed_at
+            consumed_ids.append(prompt.id)
+        if not consumed_ids:
+            return
+        self.save_state(state)
+        self.event(
+            state,
+            "user_prompts_consumed",
+            task_id=state.task_id,
+            prompt_ids=consumed_ids,
+        )
+
     def stop_request_path(self, state: WorkflowState) -> Path:
         """Return the durable stop request path for a workflow."""
         return state.run_dir / "stop-request.json"
+
+    def build_continuation_context(self, state: WorkflowState) -> ContinuationContext:
+        """Create a summary block for a new workflow resumed from an older run."""
+        return ContinuationContext(
+            source_task_id=state.task_id,
+            source_status=state.status,
+            source_approval_status=state.approval_status,
+            source_loop_count=state.loop_count,
+            source_developer_branch=state.developer_branch,
+            source_human_response_md=state.reports.get("human_response") or "_none_",
+            source_technical_summary_md=state.reports.get("technical_summary") or "_none_",
+            source_cto_report_md=state.reports.get("cto") or "_none_",
+            source_developer_report_md=state.reports.get("developer") or "_none_",
+            source_validation_summary_md=_validation_summary_text(state),
+        )
 
     def stop_requested(self, state: WorkflowState) -> bool:
         """Return whether a workflow has been asked to stop."""
@@ -441,3 +495,17 @@ def read_text_tail(path: Path, *, lines: int = 80, max_bytes: int = LOG_TAIL_BYT
     if size > max_bytes:
         text = text.split("\n", 1)[-1]
     return "\n".join(text.splitlines()[-lines:])
+
+
+def _validation_summary_text(state: WorkflowState) -> str:
+    """Render a compact validation summary from persisted workflow state."""
+    validation = state.validation.get("validation")
+    if not isinstance(validation, dict) or not validation:
+        return "_none_"
+    return (
+        f"status: {validation.get('status') or ''}\n"
+        f"exit_code: {validation.get('exit_code')}\n"
+        f"branch: {validation.get('developer_branch') or ''}\n"
+        f"command: {validation.get('command') or ''}\n"
+        f"output:\n{validation.get('output') or ''}"
+    )

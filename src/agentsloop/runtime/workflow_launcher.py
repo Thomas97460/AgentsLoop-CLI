@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import orjson
 
-from agentsloop.domain.models import RuntimeConfig
+from agentsloop.domain.models import ContinuationContext, RuntimeConfig
 from agentsloop.orchestrator import create_state
 from agentsloop.runtime.git_runtime import env_with_agent_ssh
 from agentsloop.storage.json_store import RunStore, json_dumps
@@ -27,12 +27,22 @@ class WorkflowLaunch:
     request_path: Path
 
 
+@dataclass(frozen=True, slots=True)
+class WorkflowContinuation:
+    """Optional continuation metadata for a resumed workflow launch."""
+
+    source_task_id: str
+    developer_branch: str
+    context: ContinuationContext
+
+
 def spawn_workflow_process(
     *,
     human_request_md: str,
     config: RuntimeConfig,
     task_id: str,
     runs_dir: Path,
+    continuation: WorkflowContinuation | None = None,
 ) -> WorkflowLaunch:
     """Create a run envelope and spawn the workflow in a detached process."""
     store = RunStore(runs_dir)
@@ -42,6 +52,10 @@ def spawn_workflow_process(
         task_id=task_id,
         runs_dir=runs_dir,
     )
+    if continuation is not None:
+        state.continued_from_task_id = continuation.source_task_id
+        state.continuation_context = continuation.context
+        state.developer_branch = continuation.developer_branch
     store.prepare(state)
     request_path = state.run_dir / "request.json"
     worker_log_path = state.run_dir / "worker.log"
@@ -52,11 +66,28 @@ def spawn_workflow_process(
                 "config": config.model_dump(mode="json"),
                 "task_id": task_id,
                 "runs_dir": str(runs_dir),
+                "continuation": (
+                    {
+                        "source_task_id": continuation.source_task_id,
+                        "developer_branch": continuation.developer_branch,
+                        "context": continuation.context.model_dump(mode="json"),
+                    }
+                    if continuation is not None
+                    else None
+                ),
             }
         ),
         encoding="utf-8",
     )
     store.event(state, "worker_queued", task_id=task_id, request_path=str(request_path))
+    if continuation is not None:
+        store.event(
+            state,
+            "workflow_resumed_from",
+            task_id=task_id,
+            source_task_id=continuation.source_task_id,
+            developer_branch=continuation.developer_branch,
+        )
     process = _spawn_worker(
         request_path=request_path,
         run_dir=state.run_dir,

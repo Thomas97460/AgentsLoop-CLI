@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from agentsloop.domain.models import RuntimeConfig, WorkflowState, utc_now
+from agentsloop.domain.models import ContinuationContext, RuntimeConfig, WorkflowState, utc_now
 from agentsloop.nodes.cto import run_cto
 from agentsloop.nodes.developer import run_developer
 from agentsloop.nodes.validation import run_validation
@@ -20,6 +20,9 @@ def create_state(
     config: RuntimeConfig,
     task_id: str | None = None,
     runs_dir: Path | None = None,
+    continued_from_task_id: str | None = None,
+    continuation_context: ContinuationContext | None = None,
+    developer_branch: str = "",
 ) -> WorkflowState:
     """Create the initial durable workflow state."""
     resolved_task_id = task_id or str(uuid.uuid4())
@@ -29,6 +32,9 @@ def create_state(
         human_request_md=human_request_md,
         config=config,
         run_dir=root / resolved_task_id,
+        continued_from_task_id=continued_from_task_id,
+        continuation_context=continuation_context,
+        developer_branch=developer_branch,
     )
 
 
@@ -39,6 +45,9 @@ def run_workflow(
     task_id: str | None = None,
     event_sink: EventSink | None = None,
     runs_dir: Path | None = None,
+    continued_from_task_id: str | None = None,
+    continuation_context: ContinuationContext | None = None,
+    developer_branch: str = "",
 ) -> WorkflowState:
     """Run the real provider-backed CTO/developer loop."""
     store = RunStore(runs_dir or runs_root(), event_sink=event_sink)
@@ -47,6 +56,9 @@ def run_workflow(
         human_request_md=human_request_md,
         config=config,
         task_id=task_id,
+        continued_from_task_id=continued_from_task_id,
+        continuation_context=continuation_context,
+        developer_branch=developer_branch,
     )
     env = env_with_agent_ssh(Path(config.repo_url), ssh_key_path=config.ssh_key_path)
     store.prepare(state)
@@ -111,6 +123,9 @@ def _load_or_create_state(
     human_request_md: str,
     config: RuntimeConfig,
     task_id: str | None,
+    continued_from_task_id: str | None,
+    continuation_context: ContinuationContext | None,
+    developer_branch: str,
 ) -> WorkflowState:
     """Reuse a launch envelope when a detached worker starts."""
     if task_id is not None and (store.runs_dir / task_id / "state.json").exists():
@@ -124,6 +139,9 @@ def _load_or_create_state(
         config=config,
         task_id=task_id,
         runs_dir=store.runs_dir,
+        continued_from_task_id=continued_from_task_id,
+        continuation_context=continuation_context,
+        developer_branch=developer_branch,
     )
 
 

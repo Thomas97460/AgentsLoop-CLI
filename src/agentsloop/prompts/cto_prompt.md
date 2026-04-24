@@ -83,6 +83,18 @@ You must decide between:
 # Human Request
 {{human_request_md}}
 
+# Continued Workflow Context
+If this workflow was resumed from an earlier workflow, treat this as the continuation state you inherit.
+If none is present, ignore this section.
+{{continued_workflow_context}}
+
+# New User Prompts During Execution
+These are additional user messages added while the workflow was already running.
+- You must treat them as new instructions from the user.
+- You must incorporate them into your decision and the next developer task when relevant.
+- They do not replace the original human request; they extend or refine it.
+{{pending_user_prompts}}
+
 # Previous CTO Report
 {{previous_cto_report}}
 
