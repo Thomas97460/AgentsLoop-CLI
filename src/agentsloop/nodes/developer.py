@@ -44,9 +44,7 @@ def run_developer(
     iteration = state.loop_count + 1
     prompt_md = build_prompt(state, prompts_dir)
     supports_reasoning = state.config.provider in {"codex", "copilot"}
-    reasoning_effort = (
-        state.config.developer_reasoning_effort if supports_reasoning else None
-    )
+    reasoning_effort = state.config.developer_reasoning_effort if supports_reasoning else None
     node_run = store.start_node(
         state,
         role="developer",

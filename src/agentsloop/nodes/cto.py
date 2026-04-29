@@ -39,46 +39,10 @@ def build_validation_summary(state: WorkflowState) -> str:
     )
 
 
-def build_pending_user_prompts(state: WorkflowState, store: RunStore) -> str:
-    """Render queued user prompts for the next CTO pass."""
-    prompts = store.pending_user_prompts(state)
-    if not prompts:
-        return "_none_"
-    return "\n\n".join(
-        f"## {prompt.id} at {prompt.created_at}\n{prompt.content_md}" for prompt in prompts
-    )
-
-
-def build_continuation_summary(state: WorkflowState) -> str:
-    """Render the resumed-workflow context for the first CTO pass."""
-    if state.continuation_context is None:
-        return "_none_"
-    context = state.continuation_context
-    return (
-        f"source_task_id: {context.source_task_id}\n"
-        f"source_status: {context.source_status}\n"
-        f"source_approval_status: {context.source_approval_status}\n"
-        f"source_loop_count: {context.source_loop_count}\n"
-        f"source_developer_branch: {context.source_developer_branch or '_none_'}\n\n"
-        "### Source Human Response\n"
-        f"{context.source_human_response_md}\n\n"
-        "### Source Technical Summary\n"
-        f"{context.source_technical_summary_md}\n\n"
-        "### Source CTO Report\n"
-        f"{context.source_cto_report_md}\n\n"
-        "### Source Developer Report\n"
-        f"{context.source_developer_report_md}\n\n"
-        "### Source Validation Summary\n"
-        f"{context.source_validation_summary_md}"
-    )
-
-
 def build_prompt(state: WorkflowState, prompts_dir: Path, store: RunStore) -> str:
     """Render the CTO prompt for the current state."""
     supports_reasoning = state.config.provider in {"codex", "copilot"}
-    cto_reasoning_effort = (
-        state.config.cto_reasoning_effort if supports_reasoning else "_none_"
-    )
+    cto_reasoning_effort = state.config.cto_reasoning_effort if supports_reasoning else "_none_"
     developer_reasoning_effort = (
         state.config.developer_reasoning_effort if supports_reasoning else "_none_"
     )
@@ -101,8 +65,6 @@ def build_prompt(state: WorkflowState, prompts_dir: Path, store: RunStore) -> st
             "latest_developer_report": state.reports["developer"] or "_none_",
             "latest_developer_execution_log": state.developer_result.get("stderr_path") or "_none_",
             "validation_summary": build_validation_summary(state),
-            "pending_user_prompts": build_pending_user_prompts(state, store),
-            "continued_workflow_context": build_continuation_summary(state),
         },
     )
 
@@ -164,14 +126,9 @@ def run_cto(
 ) -> None:
     """Execute one CTO pass."""
     ensure_developer_branch(state)
-    pending_prompt_ids = [prompt.id for prompt in store.pending_user_prompts(state)]
     prompt_md = build_prompt(state, prompts_dir, store)
-    if pending_prompt_ids:
-        store.mark_user_prompts_consumed(state, pending_prompt_ids)
     supports_reasoning = state.config.provider in {"codex", "copilot"}
-    reasoning_effort = (
-        state.config.cto_reasoning_effort if supports_reasoning else None
-    )
+    reasoning_effort = state.config.cto_reasoning_effort if supports_reasoning else None
     node_run = store.start_node(
         state,
         role="cto",

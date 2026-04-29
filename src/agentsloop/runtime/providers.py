@@ -41,7 +41,17 @@ def build_provider_command(
     """Build the full-access command for one supported provider."""
     if provider == "gemini":
         return ProviderCommand(
-            ["gemini", "--model", model, "--yolo", "--output-format", "text", "--prompt", prompt_md]
+            [
+                "gemini",
+                "--model",
+                model,
+                "--yolo",
+                "--skip-trust",
+                "--output-format",
+                "text",
+                "--prompt",
+                prompt_md,
+            ]
         )
     if provider == "codex":
         if output_path is None:
@@ -78,9 +88,7 @@ def build_provider_command(
         if model != "auto":
             args[1:1] = ["--model", model]
             args[3:3] = ["--reasoning-effort", effort]
-        return ProviderCommand(
-            args
-        )
+        return ProviderCommand(args)
     raise ValueError(f"Unsupported provider: {provider}")
 
 

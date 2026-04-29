@@ -38,7 +38,7 @@ CopilotModel = Literal[
     "gpt-4.1",
     "claude-haiku-4.5",
 ]
-ProviderModel = GeminiModel | CodexModel | CopilotModel
+ProviderModel = str
 
 DEFAULT_PROVIDER: ProviderName = "gemini"
 DEFAULT_GEMINI_MODEL: GeminiModel = "gemini-3-flash-preview"
@@ -130,20 +130,6 @@ class RuntimeConfig(BaseModel):
             fields["developer_model"] = default_model
         return fields
 
-    @model_validator(mode="after")
-    def validate_provider_models(self) -> RuntimeConfig:
-        """Reject node models that do not belong to the selected provider."""
-        provider_models = models_for_provider(self.provider)
-        invalid_models = [
-            model
-            for model in (self.cto_model, self.developer_model)
-            if model not in provider_models
-        ]
-        if invalid_models:
-            msg = f"models {invalid_models!r} are not supported by provider {self.provider!r}"
-            raise ValueError(msg)
-        return self
-
 
 class WorkflowEvent(BaseModel):
     """One append-only workflow event."""
@@ -198,30 +184,6 @@ class NodeRun(BaseModel):
         return f"{self.role}:{self.iteration:02d}"
 
 
-class UserPrompt(BaseModel):
-    """Durable user message queued during workflow execution."""
-
-    id: str
-    created_at: str = Field(default_factory=utc_now)
-    content_md: str
-    consumed_at: str | None = None
-
-
-class ContinuationContext(BaseModel):
-    """Stable summary passed to the first CTO of a resumed workflow."""
-
-    source_task_id: str
-    source_status: WorkflowStatus
-    source_approval_status: Literal["continue", "done"]
-    source_loop_count: int
-    source_developer_branch: str
-    source_human_response_md: str
-    source_technical_summary_md: str
-    source_cto_report_md: str
-    source_developer_report_md: str
-    source_validation_summary_md: str
-
-
 class WorkflowState(BaseModel):
     """Durable state for one CTO/developer loop run."""
 
@@ -241,10 +203,7 @@ class WorkflowState(BaseModel):
     finished_at: str | None = None
     failure_message: str = ""
     developer_branch: str = ""
-    continued_from_task_id: str | None = None
-    continuation_context: ContinuationContext | None = None
     node_runs: list[NodeRun] = Field(default_factory=list)
-    user_prompts: list[UserPrompt] = Field(default_factory=list)
     reports: dict[str, str] = Field(
         default_factory=lambda: {
             "cto": "",

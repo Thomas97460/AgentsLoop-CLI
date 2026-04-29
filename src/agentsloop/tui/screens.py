@@ -42,7 +42,6 @@ from agentsloop.domain.models import (
     RuntimeConfig,
     WorkflowState,
     default_model_for_provider,
-    models_for_provider,
 )
 from agentsloop.project_config import ProjectContext
 from agentsloop.runtime.git_runtime import (
@@ -53,7 +52,7 @@ from agentsloop.runtime.git_runtime import (
     verify_git_write_access,
 )
 from agentsloop.runtime.workflow_control import reconcile_workflow_state, request_workflow_stop
-from agentsloop.runtime.workflow_launcher import WorkflowContinuation, spawn_workflow_process
+from agentsloop.runtime.workflow_launcher import spawn_workflow_process
 from agentsloop.storage.json_store import RunStore, read_text_tail
 from agentsloop.tui.widgets import (
     LargeLogo,
@@ -67,7 +66,7 @@ from agentsloop.tui.widgets import (
 )
 
 if TYPE_CHECKING:
-    from agentsloop.tui.app import WorkflowApp
+    pass
 
 
 class WarningScreen(Screen[None]):
@@ -395,23 +394,16 @@ class LaunchScreen(Screen[None]):
         self,
         store: RunStore,
         project_context: ProjectContext,
-        *,
-        source_state: WorkflowState | None = None,
     ) -> None:
         super().__init__()
         self.store = store
         self.project_context = project_context
-        self.source_state = source_state
 
     def on_mount(self) -> None:
         """Set screen title and fetch remote branches on mount."""
-        self.app.title = "Resume Workflow" if self.source_state is not None else "New Workflow"
+        self.app.title = "New Workflow"
         self.app.sub_title = str(self.project_context.repo_root)
-        provider = (
-            self.source_state.config.provider
-            if self.source_state is not None
-            else DEFAULT_PROVIDER
-        )
+        provider = DEFAULT_PROVIDER
         self._refresh_reasoning_controls(provider)
         if self.project_context.remote_url:
             self.run_worker(self._fetch_branches())
@@ -436,42 +428,15 @@ class LaunchScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         """Compose the launch form."""
-        source_config = self.source_state.config if self.source_state is not None else None
-        default_provider = source_config.provider if source_config is not None else DEFAULT_PROVIDER
-        default_cto_model = (
-            source_config.cto_model
-            if source_config is not None
-            else default_model_for_provider(DEFAULT_PROVIDER)
-        )
-        default_developer_model = (
-            source_config.developer_model
-            if source_config is not None
-            else default_model_for_provider(DEFAULT_PROVIDER)
-        )
-        default_cto_reasoning = (
-            source_config.cto_reasoning_effort
-            if source_config is not None
-            else DEFAULT_CODEX_REASONING_EFFORT
-        )
-        default_developer_reasoning = (
-            source_config.developer_reasoning_effort
-            if source_config is not None
-            else DEFAULT_CODEX_REASONING_EFFORT
-        )
-        default_base_branch = (
-            source_config.base_branch
-            if source_config is not None
-            else self.project_context.base_branch
-        )
-        default_validation_command = (
-            source_config.validation_command
-            if source_config is not None
-            else self.project_context.validation_command
-        )
-        default_loop_limit = str(source_config.loop_limit) if source_config is not None else "3"
-        default_request = (
-            self.source_state.human_request_md if self.source_state is not None else ""
-        )
+        default_provider = DEFAULT_PROVIDER
+        default_cto_model = default_model_for_provider(DEFAULT_PROVIDER)
+        default_developer_model = default_model_for_provider(DEFAULT_PROVIDER)
+        default_cto_reasoning = DEFAULT_CODEX_REASONING_EFFORT
+        default_developer_reasoning = DEFAULT_CODEX_REASONING_EFFORT
+        default_base_branch = self.project_context.base_branch
+        default_validation_command = self.project_context.validation_command
+        default_loop_limit = "3"
+        default_request = ""
         with Vertical(classes="page"):
             with Horizontal(id="launch-grid"):
                 with Vertical(id="launch-main", classes="panel"):
@@ -498,20 +463,16 @@ class LaunchScreen(Screen[None]):
                         prompt="Select Provider",
                     )
                     yield Label("CTO MODEL", classes="field-label")
-                    yield Select[ProviderModel](
-                        [(model, model) for model in models_for_provider(default_provider)],
+                    yield Input(
                         value=default_cto_model,
-                        allow_blank=False,
                         id="cto_model",
-                        prompt="Select CTO model",
+                        placeholder="e.g., gemini-2.0-flash",
                     )
                     yield Label("DEVELOPER MODEL", classes="field-label")
-                    yield Select[ProviderModel](
-                        [(model, model) for model in models_for_provider(default_provider)],
+                    yield Input(
                         value=default_developer_model,
-                        allow_blank=False,
                         id="developer_model",
-                        prompt="Select developer model",
+                        placeholder="e.g., gemini-2.0-flash",
                     )
                     yield Label(
                         "CTO REASONING",
@@ -614,7 +575,6 @@ class LaunchScreen(Screen[None]):
             config=config,
             task_id=task_id,
             runs_dir=self.store.runs_dir,
-            continuation=self._continuation_payload(),
         )
         self.app.push_screen(WorkflowScreen(self.store, launch.task_id))
 
@@ -630,9 +590,8 @@ class LaunchScreen(Screen[None]):
 
     def _refresh_model_select(self, select_id: str, provider: ProviderName) -> None:
         """Refresh one model selector for the selected provider."""
-        model_select = self.query_one(select_id, Select)
-        model_select.set_options([(model, model) for model in models_for_provider(provider)])
-        model_select.value = default_model_for_provider(provider)
+        model_input = self.query_one(select_id, Input)
+        model_input.value = default_model_for_provider(provider)
 
     def _refresh_reasoning_controls(self, provider: ProviderName) -> None:
         """Show reasoning controls only for providers that support them."""
@@ -652,9 +611,9 @@ class LaunchScreen(Screen[None]):
 
     def _selected_model(self, provider: ProviderName, select_id: str) -> ProviderModel | None:
         """Return the selected model after UI validation."""
-        value = self.query_one(select_id, Select).value
-        if value not in models_for_provider(provider):
-            self.notify(f"Select a supported {provider} model", severity="error")
+        value = self.query_one(select_id, Input).value.strip()
+        if not value:
+            self.notify(f"{provider} model name is required", severity="error")
             return None
         return cast(ProviderModel, value)
 
@@ -679,65 +638,6 @@ class LaunchScreen(Screen[None]):
             return None
         return loop_limit
 
-    def _continuation_payload(self) -> WorkflowContinuation | None:
-        """Build the optional continuation payload for resumed workflows."""
-        if self.source_state is None:
-            return None
-        return WorkflowContinuation(
-            source_task_id=self.source_state.task_id,
-            developer_branch=self.source_state.developer_branch,
-            context=self.store.build_continuation_context(self.source_state),
-        )
-
-
-class UserPromptScreen(Screen[None]):
-    """Collect one additional user prompt for a running workflow."""
-
-    BINDINGS: ClassVar[list[BindingType]] = [("escape", "app.pop_screen", "Back")]
-
-    def __init__(self, store: RunStore, task_id: str) -> None:
-        super().__init__()
-        self.store = store
-        self.task_id = task_id
-
-    def compose(self) -> ComposeResult:
-        """Compose the add-prompt form."""
-        with Vertical(classes="page"):
-            with Vertical(classes="panel"):
-                yield Label("USER PROMPT", classes="table-title")
-                yield TextArea("", id="user-prompt-input")
-                yield Static(
-                    "This message will be queued for the next CTO pass.",
-                    classes="hint",
-                )
-            with Horizontal(classes="actions"):
-                yield Button("Queue Prompt", variant="success", id="queue-user-prompt")
-                yield Button("Back", id="back")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        """Focus the input when the screen opens."""
-        self.query_one("#user-prompt-input", TextArea).focus()
-
-    @on(Button.Pressed, "#queue-user-prompt")
-    def queue_prompt(self) -> None:
-        """Persist a prompt for the next CTO pass."""
-        content = self.query_one("#user-prompt-input", TextArea).text.strip()
-        if not content:
-            self.notify("Prompt is required", severity="error")
-            return
-        state = self.store.load_state(self.task_id)
-        if state.status not in {"running", "stopping"}:
-            self.notify(f"Workflow is already {state.status}", severity="warning")
-            return
-        self.store.append_user_prompt(state, content)
-        self.app.pop_screen()
-
-    @on(Button.Pressed, "#back")
-    def back(self) -> None:
-        """Return to the previous screen."""
-        self.app.pop_screen()
-
 
 class WorkflowScreen(Screen[None]):
     """Unified live workflow and historical activity reader."""
@@ -749,8 +649,6 @@ class WorkflowScreen(Screen[None]):
         ("b", "copy_branch", "Copy branch"),
         ("c", "copy_current_node", "Copy node"),
         ("e", "copy_events", "Copy activity"),
-        ("a", "add_user_prompt", "Add prompt"),
-        ("u", "resume_workflow", "Resume"),
         ("s", "stop_workflow", "Stop"),
     ]
 
@@ -772,8 +670,6 @@ class WorkflowScreen(Screen[None]):
             with Horizontal(id="workflow-status-bar"):
                 yield Static("", id="workflow-status")
                 yield Button("Pause", id="pause-refresh")
-                yield Button("Add Prompt", id="add-user-prompt")
-                yield Button("Resume", id="resume-workflow")
                 yield Button("Copy Node", id="copy-node")
                 yield Button("Copy Activity", id="copy-events")
                 yield Button("Stop", variant="error", id="stop-workflow")
@@ -863,16 +759,6 @@ class WorkflowScreen(Screen[None]):
         """Copy the developer branch name."""
         self.action_copy_branch()
 
-    @on(Button.Pressed, "#add-user-prompt")
-    def on_add_user_prompt_pressed(self) -> None:
-        """Open the prompt queue screen."""
-        self.action_add_user_prompt()
-
-    @on(Button.Pressed, "#resume-workflow")
-    def on_resume_pressed(self) -> None:
-        """Open the resume form for finished workflows."""
-        self.action_resume_workflow()
-
     def action_toggle_refresh(self) -> None:
         """Pause or resume live refresh to allow terminal text selection."""
         self._refresh_paused = not self._refresh_paused
@@ -947,31 +833,6 @@ class WorkflowScreen(Screen[None]):
             return
         self._copy_text(branch, "Developer branch copied")
 
-    def action_add_user_prompt(self) -> None:
-        """Open a form to queue an extra user prompt."""
-        try:
-            state = self.store.load_state(self.task_id)
-        except Exception:
-            self.notify("Unable to read workflow state", severity="error")
-            return
-        if state.status not in {"running", "stopping"}:
-            self.notify("Add prompts only while the workflow is active", severity="warning")
-            return
-        self.app.push_screen(UserPromptScreen(self.store, self.task_id))
-
-    def action_resume_workflow(self) -> None:
-        """Open a prefilled launch form to continue a finished workflow."""
-        try:
-            state = self.store.load_state(self.task_id)
-        except Exception:
-            self.notify("Unable to read workflow state", severity="error")
-            return
-        if state.status in {"running", "stopping"}:
-            self.notify("Stop the active workflow before resuming it", severity="warning")
-            return
-        app = cast("WorkflowApp", self.app)
-        self.app.push_screen(LaunchScreen(self.store, app.project_context, source_state=state))
-
     @on(DataTable.RowSelected, "#nodes")
     def on_node_selected(self) -> None:
         """Update report when a node is selected."""
@@ -1014,10 +875,7 @@ class WorkflowScreen(Screen[None]):
                 "#d7b66f" if self._refresh_paused else "#7fbf9a",
             ),
             ("  ", "dim"),
-            (f"queued prompts {len(self.store.pending_user_prompts(state))}", "#88a7c7"),
-            ("  ", "dim"),
-            ("resumed" if state.continued_from_task_id else "fresh", "#d7b66f"),
-            ("  P pause/resume  A add prompt  U resume  C copy node  E copy activity", "dim"),
+            ("  P pause/resume  C copy node  E copy activity", "dim"),
         )
         if state.failure_message:
             text.append(f"  {state.failure_message}", style="bold #e07868")
@@ -1027,14 +885,6 @@ class WorkflowScreen(Screen[None]):
             self._last_status_content = status_content
         stop = self.query_one("#stop-workflow", Button)
         stop.disabled = state.status not in {"running", "stopping"}
-        self.query_one("#add-user-prompt", Button).disabled = state.status not in {
-            "running",
-            "stopping",
-        }
-        self.query_one("#resume-workflow", Button).disabled = state.status in {
-            "running",
-            "stopping",
-        }
         self._update_pause_button()
 
     def _update_branch_bar(self, state: WorkflowState) -> None:

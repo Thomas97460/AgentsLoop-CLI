@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 from textual.screen import Screen
-from textual.widgets import Input, Label, Select, TextArea
+from textual.widgets import Input, Label, Select
 from typer.testing import CliRunner
 
 from agentsloop.cli import cli
@@ -33,7 +33,6 @@ from agentsloop.domain.models import (
     WorkflowState,
     utc_now,
 )
-from agentsloop.nodes.cto import build_prompt as build_cto_prompt
 from agentsloop.nodes.cto import ensure_developer_branch
 from agentsloop.orchestrator import run_workflow
 from agentsloop.paths import prompts_root, runs_root
@@ -50,7 +49,7 @@ from agentsloop.runtime.git_runtime import (
 from agentsloop.runtime.providers import build_provider_command
 from agentsloop.runtime.templates import parse_approval_status, render_template, slugify
 from agentsloop.runtime.workflow_control import reconcile_workflow_state, request_workflow_stop
-from agentsloop.runtime.workflow_launcher import WorkflowContinuation, spawn_workflow_process
+from agentsloop.runtime.workflow_launcher import spawn_workflow_process
 from agentsloop.storage.json_store import RunStore, application_name_from_repo_url, json_dumps
 from agentsloop.tui.app import WorkflowApp
 from agentsloop.tui.screens import (
@@ -115,37 +114,14 @@ def test_runtime_config_uses_strict_provider_models() -> None:
     )
     assert REASONING_EFFORTS == ("low", "medium", "high", "xhigh")
     assert runtime_config.validation_command == DEFAULT_VALIDATION_COMMAND
-    with pytest.raises(ValidationError):
-        RuntimeConfig(repo_url="git@example.com:x/y.git", cto_model=cast(Any, "gemini-test"))
-    with pytest.raises(ValidationError):
-        RuntimeConfig(
-            provider="gemini",
-            repo_url="git@example.com:x/y.git",
-            developer_model=DEFAULT_CODEX_MODEL,
-        )
-    with pytest.raises(ValidationError):
-        RuntimeConfig(
-            provider="codex",
-            repo_url="git@example.com:x/y.git",
-            cto_model=DEFAULT_GEMINI_MODEL,
-        )
-    with pytest.raises(ValidationError):
-        RuntimeConfig(
-            provider="codex",
-            repo_url="git@example.com:x/y.git",
-            cto_model=cast(Any, "gpt-5.1-codex-mini"),
-        )
+    # Model validation is now free-form string
+    custom_config = RuntimeConfig(repo_url="git@example.com:x/y.git", cto_model="custom-model")
+    assert custom_config.cto_model == "custom-model"
     with pytest.raises(ValidationError):
         RuntimeConfig(
             provider="codex",
             repo_url="git@example.com:x/y.git",
             cto_reasoning_effort=cast(Any, "extreme"),
-        )
-    with pytest.raises(ValidationError):
-        RuntimeConfig(
-            provider="copilot",
-            repo_url="git@example.com:x/y.git",
-            cto_model=DEFAULT_GEMINI_MODEL,
         )
     copilot_auto_config = RuntimeConfig(
         provider="copilot",
@@ -196,6 +172,7 @@ def test_provider_command_uses_gemini_headless() -> None:
         "--model",
         DEFAULT_GEMINI_MODEL,
         "--yolo",
+        "--skip-trust",
         "--output-format",
         "text",
         "--prompt",
@@ -471,57 +448,6 @@ def test_store_reads_old_runs_with_obsolete_codex_models(tmp_path: Path) -> None
     assert store.list_runs()[0].provider == "codex"
 
 
-def test_store_appends_and_consumes_user_prompts(tmp_path: Path) -> None:
-    """Queue user prompts durably and consume them once the CTO picks them up."""
-    state = run_state(tmp_path)
-    store = RunStore(tmp_path)
-    store.prepare(state)
-
-    first = store.append_user_prompt(state, "Please also update the README.")
-    second = store.append_user_prompt(state, "Do not remove the existing CLI flags.")
-
-    assert [prompt.id for prompt in store.pending_user_prompts(state)] == [first.id, second.id]
-    loaded = store.load_state("run-1")
-    assert [prompt.content_md for prompt in loaded.user_prompts] == [
-        "Please also update the README.",
-        "Do not remove the existing CLI flags.",
-    ]
-
-    store.mark_user_prompts_consumed(loaded, [first.id, second.id])
-    consumed = store.load_state("run-1")
-    assert store.pending_user_prompts(consumed) == []
-    events = workflow_events_plain_text(store.read_events("run-1"))
-    assert "user_prompt_added" in events
-    assert "user_prompts_consumed" in events
-
-
-def test_cto_prompt_includes_pending_user_prompts_and_continuation_context(tmp_path: Path) -> None:
-    """Render new user prompts and resume context into the CTO prompt."""
-    store = RunStore(tmp_path)
-    source = run_state(tmp_path)
-    source.status = "stopped"
-    source.loop_count = 2
-    source.developer_branch = "agent/dev/build-the-thing-run-1"
-    source.reports["human_response"] = "Paused after review."
-    source.reports["technical_summary"] = "One last fix is needed."
-    source.reports["cto"] = "# Controller"
-    source.reports["developer"] = "# Summary"
-    source.validation = {"validation": {"status": "error", "exit_code": 1, "command": "pytest"}}
-
-    state = run_state(tmp_path)
-    state.continued_from_task_id = source.task_id
-    state.continuation_context = store.build_continuation_context(source)
-    store.prepare(state)
-    store.append_user_prompt(state, "Add support for workflow resume.")
-
-    rendered = build_cto_prompt(state, prompts_root(), store)
-    assert "New User Prompts During Execution" in rendered
-    assert "Add support for workflow resume." in rendered
-    assert "Continued Workflow Context" in rendered
-    assert f"source_task_id: {source.task_id}" in rendered
-    assert "Paused after review." in rendered
-
-
 def test_workflow_launcher_spawns_detached_worker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -551,44 +477,6 @@ def test_workflow_launcher_spawns_detached_worker(
     state = RunStore(tmp_path).load_state("run-1")
     assert state.worker_pid == 1234
     assert state.worker_log_path == launch.worker_log_path
-
-
-def test_workflow_launcher_persists_continuation_metadata(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Store resumed-workflow metadata in the new run envelope."""
-
-    class FakePopen:
-        pid = 1234
-
-        def __init__(self, *_args: object, **_kwargs: object) -> None:
-            pass
-
-    monkeypatch.setattr("agentsloop.runtime.workflow_launcher.subprocess.Popen", FakePopen)
-    source = run_state(tmp_path)
-    source.task_id = "run-source"
-    source.status = "stopped"
-    source.developer_branch = "agent/dev/build-the-thing-run-source"
-    source.reports["human_response"] = "Stopped for feedback."
-    source.reports["technical_summary"] = "Need to incorporate the new prompt."
-    continuation = WorkflowContinuation(
-        source_task_id=source.task_id,
-        developer_branch=source.developer_branch,
-        context=RunStore(tmp_path).build_continuation_context(source),
-    )
-
-    spawn_workflow_process(
-        human_request_md="Continue the task",
-        config=config(),
-        task_id="run-2",
-        runs_dir=tmp_path,
-        continuation=continuation,
-    )
-    state = RunStore(tmp_path).load_state("run-2")
-    assert state.continued_from_task_id == "run-source"
-    assert state.developer_branch == "agent/dev/build-the-thing-run-source"
-    assert state.continuation_context is not None
-    assert state.continuation_context.source_task_id == "run-source"
 
 
 def test_request_stop_marks_workflow_stopped_without_worker(tmp_path: Path) -> None:
@@ -725,80 +613,6 @@ def test_orchestrator_runs_with_stubbed_agents_and_validation(
     assert (tmp_path / "run-1" / "summary.md").exists()
 
 
-def test_orchestrator_consumes_pending_user_prompts_on_next_cto_pass(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The next CTO prompt must include queued user prompts once, then consume them."""
-    cto_prompts: list[str] = []
-    cto_reports = [
-        "# Controller\napproval_status: continue\n\n# Developer Task\nImplement the change.\n",
-        "# Controller\napproval_status: done\n\n# Developer Task\n_none_\n",
-    ]
-
-    def fake_run_agent(spec: AgentRunSpec, _task_id: str) -> ProviderResult:
-        if spec.role == "cto":
-            cto_prompts.append(spec.prompt_md)
-            report = cto_reports.pop(0).replace(
-                "approval_status: continue",
-                f"approval_status: continue\ndeveloper_branch: {spec.working_branch}",
-            ).replace(
-                "approval_status: done",
-                f"approval_status: done\ndeveloper_branch: {spec.working_branch}",
-            )
-        else:
-            report = "# Summary\nDone"
-        return ProviderResult(
-            provider=spec.provider,
-            role=spec.role,
-            model=spec.model,
-            reasoning_effort=spec.reasoning_effort,
-            status="success",
-            report_md=report,
-            stdout_path=str(spec.stdout_path),
-            stderr_path=str(spec.stderr_path),
-            exit_code=0,
-            started_at=utc_now(),
-            finished_at=utc_now(),
-            repo_path=str(spec.repo_path),
-            branch=spec.working_branch or "main",
-        )
-
-    def fake_clone_for_agent(**kwargs: object) -> None:
-        repo_path = kwargs["repo_path"]
-        assert isinstance(repo_path, Path)
-        repo_path.mkdir(parents=True)
-
-    class FakeProcess:
-        returncode = 0
-
-        def __init__(self, *_args: object, stdout: TextIO, **_kwargs: object) -> None:
-            stdout.write("ok\n")
-
-        def wait(self) -> int:
-            return self.returncode
-
-    monkeypatch.setattr("agentsloop.nodes.cto.run_agent", fake_run_agent)
-    monkeypatch.setattr("agentsloop.nodes.developer.run_agent", fake_run_agent)
-    monkeypatch.setattr("agentsloop.nodes.cto.run_git", lambda *args, **kwargs: None)
-    monkeypatch.setattr("agentsloop.nodes.validation.clone_for_agent", fake_clone_for_agent)
-    monkeypatch.setattr("agentsloop.nodes.validation.subprocess.Popen", FakeProcess)
-
-    store = RunStore(tmp_path)
-    state = run_state(tmp_path)
-    store.prepare(state)
-    store.append_user_prompt(state, "Please cover the resume flow too.")
-
-    resumed = run_workflow(
-        human_request_md=state.human_request_md,
-        config=state.config,
-        task_id=state.task_id,
-        runs_dir=tmp_path,
-    )
-    assert resumed.status == "success"
-    assert "Please cover the resume flow too." in cto_prompts[0]
-    assert RunStore(tmp_path).pending_user_prompts(RunStore(tmp_path).load_state("run-1")) == []
-
-
 def test_orchestrator_marks_running_node_error_on_exception(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -833,7 +647,10 @@ def test_orchestrator_surfaces_provider_error_message(
             model="auto",
             reasoning_effort="medium",
             status="error",
-            report_md="Sorry, you've hit a rate limit that restricts the number of Copilot model requests you can make within a specific time period.",
+            report_md=(
+                "Sorry, you've hit a rate limit that restricts the number of "
+                "Copilot model requests you can make within a specific time period."
+            ),
             stdout_path="stdout.txt",
             stderr_path="stderr.txt",
             exit_code=1,
@@ -852,26 +669,30 @@ def test_orchestrator_surfaces_provider_error_message(
                 repo_url="git@example.com:x/y.git",
                 cto_model="auto",
                 developer_model="auto",
+                ssh_key_path=tmp_path / "dummy_key",
             ),
             task_id="run-1",
             runs_dir=tmp_path,
         )
     state = RunStore(tmp_path).load_state("run-1")
     assert state.status == "error"
-    assert (
-        state.failure_message
-        == "CTO node failed: Sorry, you've hit a rate limit that restricts the number of Copilot model requests you can make within a specific time period."
+    assert state.failure_message == (
+        "CTO node failed: Sorry, you've hit a rate limit that restricts the number of Copilot "
+        "model requests you can make within a specific time period."
     )
 
 
 def test_cli_exposes_only_tui_options() -> None:
     """Remove the old Rich command surface from the user-facing CLI."""
+    import click
+
     runner = CliRunner()
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
-    assert "--runs-root" in result.output
-    assert "history" not in result.output
-    assert "watch" not in result.output
+    clean_output = click.unstyle(result.output)
+    assert "--runs-root" in clean_output
+    assert "history" not in clean_output
+    assert "watch" not in clean_output
 
 
 def test_cli_requires_git_repo(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -956,22 +777,18 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
             app.push_screen(LaunchScreen(app.store, context))
             await pilot.pause()
             provider_select = app.screen.query_one("#provider", Select)
-            cto_model_select = app.screen.query_one("#cto_model", Select)
-            developer_model_select = app.screen.query_one("#developer_model", Select)
+            cto_model_input = app.screen.query_one("#cto_model", Input)
+            developer_model_input = app.screen.query_one("#developer_model", Input)
             cto_reasoning_select = app.screen.query_one("#cto_reasoning_effort", Select)
             cto_reasoning_label = app.screen.query_one("#cto_reasoning_label", Label)
-            developer_reasoning_select = app.screen.query_one(
-                "#developer_reasoning_effort", Select
-            )
-            developer_reasoning_label = app.screen.query_one(
-                "#developer_reasoning_label", Label
-            )
+            developer_reasoning_select = app.screen.query_one("#developer_reasoning_effort", Select)
+            developer_reasoning_label = app.screen.query_one("#developer_reasoning_label", Label)
             base_branch_select = app.screen.query_one("#base_branch", Select)
             validation_command = app.screen.query_one("#validation_command", Input)
             _assert_reasoning_controls(
                 provider_select=provider_select,
-                cto_model_select=cto_model_select,
-                developer_model_select=developer_model_select,
+                cto_model_input=cto_model_input,
+                developer_model_input=developer_model_input,
                 cto_reasoning_select=cto_reasoning_select,
                 cto_reasoning_label=cto_reasoning_label,
                 developer_reasoning_select=developer_reasoning_select,
@@ -984,8 +801,8 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
             await pilot.pause()
             _assert_reasoning_controls(
                 provider_select=provider_select,
-                cto_model_select=cto_model_select,
-                developer_model_select=developer_model_select,
+                cto_model_input=cto_model_input,
+                developer_model_input=developer_model_input,
                 cto_reasoning_select=cto_reasoning_select,
                 cto_reasoning_label=cto_reasoning_label,
                 developer_reasoning_select=developer_reasoning_select,
@@ -998,8 +815,8 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
             await pilot.pause()
             _assert_reasoning_controls(
                 provider_select=provider_select,
-                cto_model_select=cto_model_select,
-                developer_model_select=developer_model_select,
+                cto_model_input=cto_model_input,
+                developer_model_input=developer_model_input,
                 cto_reasoning_select=cto_reasoning_select,
                 cto_reasoning_label=cto_reasoning_label,
                 developer_reasoning_select=developer_reasoning_select,
@@ -1018,8 +835,8 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
 def _assert_reasoning_controls(
     *,
     provider_select: Select[str],
-    cto_model_select: Select[str],
-    developer_model_select: Select[str],
+    cto_model_input: Input,
+    developer_model_input: Input,
     cto_reasoning_select: Select[str],
     cto_reasoning_label: Label,
     developer_reasoning_select: Select[str],
@@ -1030,8 +847,8 @@ def _assert_reasoning_controls(
 ) -> None:
     """Assert provider-specific model and reasoning UI state."""
     assert provider_select.value == provider
-    assert cto_model_select.value == model
-    assert developer_model_select.value == model
+    assert cto_model_input.value == model
+    assert developer_model_input.value == model
     assert cto_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
     assert developer_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
     assert cto_reasoning_select.disabled is hidden
@@ -1148,48 +965,6 @@ def test_textual_app_collects_first_run_validation_command(tmp_path: Path) -> No
                 assert context.validation_command == "npm test"
                 assert store.load() is not None
                 app.exit()
-
-    asyncio.run(run_app())
-
-
-def test_launch_screen_prefills_resume_form(tmp_path: Path) -> None:
-    """Resume launches should reuse the previous workflow configuration by default."""
-
-    async def run_app() -> None:
-        context = ProjectContext(
-            repo_root=tmp_path,
-            base_branch="main",
-            ssh_key_path=tmp_path / "id_rsa",
-        )
-        app = WorkflowApp(tmp_path / "runs", context)
-        source = run_state(tmp_path)
-        source.status = "stopped"
-        source.human_request_md = "Continue and add resume support"
-        source.config.provider = "codex"
-        source.config.cto_model = DEFAULT_CODEX_MODEL
-        source.config.developer_model = DEFAULT_CODEX_MODEL
-        source.config.cto_reasoning_effort = "high"
-        source.config.developer_reasoning_effort = "low"
-        source.config.base_branch = "develop"
-        source.config.loop_limit = 5
-        source.config.validation_command = "pytest -q"
-
-        async with app.run_test() as pilot:
-            app.push_screen(LaunchScreen(app.store, context, source_state=source))
-            await pilot.pause()
-            assert (
-                app.screen.query_one("#request", TextArea).text
-                == "Continue and add resume support"
-            )
-            assert app.screen.query_one("#provider", Select).value == "codex"
-            assert app.screen.query_one("#cto_model", Select).value == DEFAULT_CODEX_MODEL
-            assert app.screen.query_one("#developer_model", Select).value == DEFAULT_CODEX_MODEL
-            assert app.screen.query_one("#cto_reasoning_effort", Select).value == "high"
-            assert app.screen.query_one("#developer_reasoning_effort", Select).value == "low"
-            assert app.screen.query_one("#base_branch", Select).value == "develop"
-            assert app.screen.query_one("#validation_command", Input).value == "pytest -q"
-            assert app.screen.query_one("#loop_limit", Input).value == "5"
-            app.exit()
 
     asyncio.run(run_app())
 
