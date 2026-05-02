@@ -615,7 +615,7 @@ class LaunchScreen(Screen[None]):
         if not value:
             self.notify(f"{provider} model name is required", severity="error")
             return None
-        return cast(ProviderModel, value)
+        return value
 
     def _selected_reasoning_effort(self, select_id: str) -> ReasoningEffort | None:
         """Return the selected reasoning effort after UI validation."""
