@@ -1,0 +1,109 @@
+[project]
+name = "agentsloop-cli"
+dynamic = ["version"]
+description = "CLI and TUI for orchestrating agent loops with Gemini CLI and Codex CLI."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    { name = "AgentsLoop CLI contributors" },
+]
+keywords = ["agents", "cli", "codex", "gemini", "workflow", "tui"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+]
+dependencies = [
+    "art>=6.5",
+    "orjson>=3.11.6",
+    "pydantic>=2.5.0",
+    "rich>=14.1.0",
+    "textual>=6.5.0",
+    "typer>=0.20.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Thomas97460/AgentsLoop-CLI"
+Repository = "https://github.com/Thomas97460/AgentsLoop-CLI"
+Issues = "https://github.com/Thomas97460/AgentsLoop-CLI/issues"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.8.0",
+    "pytest>=9.0.2",
+    "ruff>=0.14.14",
+]
+
+[project.scripts]
+agentsloop = "agentsloop.cli:main"
+agents-loop = "agentsloop.cli:main"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/AGENTS.md",
+    "/install.sh",
+    "/LICENSE",
+    "/pyproject.toml",
+    "/uv.lock",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentsloop"]
+artifacts = ["src/agentsloop/prompts/*.md"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "N", "D", "ANN", "PL", "RUF"]
+ignore = [
+    "D100",
+    "D104",
+    "D107",
+    "PLR0913",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "D", "PLR2004", "PLC0415"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+suppress-dummy-args = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
