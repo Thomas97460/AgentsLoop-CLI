@@ -172,7 +172,6 @@ def test_provider_command_uses_gemini_headless() -> None:
         "--model",
         DEFAULT_GEMINI_MODEL,
         "--yolo",
-        "--skip-trust",
         "--output-format",
         "text",
         "--prompt",
@@ -777,8 +776,10 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
             app.push_screen(LaunchScreen(app.store, context))
             await pilot.pause()
             provider_select = app.screen.query_one("#provider", Select)
-            cto_model_input = app.screen.query_one("#cto_model", Input)
-            developer_model_input = app.screen.query_one("#developer_model", Input)
+            cto_model_input = app.screen.query_one("#cto_model_input", Input)
+            developer_model_input = app.screen.query_one("#developer_model_input", Input)
+            cto_model_select = app.screen.query_one("#cto_model_select", Select)
+            developer_model_select = app.screen.query_one("#developer_model_select", Select)
             cto_reasoning_select = app.screen.query_one("#cto_reasoning_effort", Select)
             cto_reasoning_label = app.screen.query_one("#cto_reasoning_label", Label)
             developer_reasoning_select = app.screen.query_one("#developer_reasoning_effort", Select)
@@ -787,8 +788,8 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
             validation_command = app.screen.query_one("#validation_command", Input)
             _assert_reasoning_controls(
                 provider_select=provider_select,
-                cto_model_input=cto_model_input,
-                developer_model_input=developer_model_input,
+                cto_model_select=cto_model_select,
+                developer_model_select=developer_model_select,
                 cto_reasoning_select=cto_reasoning_select,
                 cto_reasoning_label=cto_reasoning_label,
                 developer_reasoning_select=developer_reasoning_select,
@@ -801,8 +802,8 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
             await pilot.pause()
             _assert_reasoning_controls(
                 provider_select=provider_select,
-                cto_model_input=cto_model_input,
-                developer_model_input=developer_model_input,
+                cto_model_select=cto_model_select,
+                developer_model_select=developer_model_select,
                 cto_reasoning_select=cto_reasoning_select,
                 cto_reasoning_label=cto_reasoning_label,
                 developer_reasoning_select=developer_reasoning_select,
@@ -815,8 +816,8 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
             await pilot.pause()
             _assert_reasoning_controls(
                 provider_select=provider_select,
-                cto_model_input=cto_model_input,
-                developer_model_input=developer_model_input,
+                cto_model_select=cto_model_select,
+                developer_model_select=developer_model_select,
                 cto_reasoning_select=cto_reasoning_select,
                 cto_reasoning_label=cto_reasoning_label,
                 developer_reasoning_select=developer_reasoning_select,
@@ -835,8 +836,8 @@ def test_textual_app_launch_screen_contains_model_select(tmp_path: Path) -> None
 def _assert_reasoning_controls(
     *,
     provider_select: Select[str],
-    cto_model_input: Input,
-    developer_model_input: Input,
+    cto_model_select: Select[str],
+    developer_model_select: Select[str],
     cto_reasoning_select: Select[str],
     cto_reasoning_label: Label,
     developer_reasoning_select: Select[str],
@@ -847,8 +848,8 @@ def _assert_reasoning_controls(
 ) -> None:
     """Assert provider-specific model and reasoning UI state."""
     assert provider_select.value == provider
-    assert cto_model_input.value == model
-    assert developer_model_input.value == model
+    assert cto_model_select.value == model
+    assert developer_model_select.value == model
     assert cto_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
     assert developer_reasoning_select.value == DEFAULT_CODEX_REASONING_EFFORT
     assert cto_reasoning_select.disabled is hidden

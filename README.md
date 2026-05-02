@@ -1,9 +1,6 @@
 <div align="center">
-  <video width="800" controls poster="https://via.placeholder.com/800x450.png?text=AgentsLoop+CLI+Demo+Video">
-    <source src="https://your-video-link-here.mp4" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-  <p><i>Watch AgentsLoop CLI in action (Video coming soon)</i></p>
+  <img src="assets/demo.gif" width="800" alt="AgentsLoop CLI Demo">
+  <p><i>Watch AgentsLoop CLI in action</i></p>
 
 [![CI](https://img.shields.io/github/actions/workflow/status/Thomas97460/AgentsLoop-CLI/ci.yml?branch=main&label=CI)](https://github.com/Thomas97460/AgentsLoop-CLI/actions/workflows/ci.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)

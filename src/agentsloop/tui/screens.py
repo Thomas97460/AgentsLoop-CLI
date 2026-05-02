@@ -33,6 +33,7 @@ from agentsloop.domain.models import (
     DEFAULT_CODEX_REASONING_EFFORT,
     DEFAULT_PROVIDER,
     DEFAULT_VALIDATION_COMMAND,
+    GEMINI_MODELS,
     PROVIDERS,
     REASONING_EFFORTS,
     NodeRun,
@@ -42,6 +43,7 @@ from agentsloop.domain.models import (
     RuntimeConfig,
     WorkflowState,
     default_model_for_provider,
+    models_for_provider,
 )
 from agentsloop.project_config import ProjectContext
 from agentsloop.runtime.git_runtime import (
@@ -463,16 +465,30 @@ class LaunchScreen(Screen[None]):
                         prompt="Select Provider",
                     )
                     yield Label("CTO MODEL", classes="field-label")
+                    yield Select[str](
+                        [(m, m) for m in GEMINI_MODELS] + [("custom", "Custom...")],
+                        value=default_cto_model,
+                        allow_blank=False,
+                        id="cto_model_select",
+                    )
                     yield Input(
                         value=default_cto_model,
-                        id="cto_model",
+                        id="cto_model_input",
                         placeholder="e.g., gemini-2.0-flash",
+                        classes="hidden",
                     )
                     yield Label("DEVELOPER MODEL", classes="field-label")
+                    yield Select[str](
+                        [(m, m) for m in GEMINI_MODELS] + [("custom", "Custom...")],
+                        value=default_developer_model,
+                        allow_blank=False,
+                        id="developer_model_select",
+                    )
                     yield Input(
                         value=default_developer_model,
-                        id="developer_model",
+                        id="developer_model_input",
                         placeholder="e.g., gemini-2.0-flash",
+                        classes="hidden",
                     )
                     yield Label(
                         "CTO REASONING",
@@ -529,8 +545,8 @@ class LaunchScreen(Screen[None]):
         provider = self._selected_provider()
         if provider is None:
             return
-        cto_model = self._selected_model(provider, "#cto_model")
-        developer_model = self._selected_model(provider, "#developer_model")
+        cto_model = self._selected_model("#cto_model_select", "#cto_model_input")
+        developer_model = self._selected_model("#developer_model_select", "#developer_model_input")
         cto_reasoning_effort = self._selected_reasoning_effort("#cto_reasoning_effort")
         developer_reasoning_effort = self._selected_reasoning_effort("#developer_reasoning_effort")
         loop_limit = self._loop_limit()
@@ -584,14 +600,35 @@ class LaunchScreen(Screen[None]):
         if event.value not in PROVIDERS:
             return
         provider = cast(ProviderName, event.value)
-        self._refresh_model_select("#cto_model", provider)
-        self._refresh_model_select("#developer_model", provider)
+        self._refresh_model_select("#cto_model_select", "#cto_model_input", provider)
+        self._refresh_model_select("#developer_model_select", "#developer_model_input", provider)
         self._refresh_reasoning_controls(provider)
 
-    def _refresh_model_select(self, select_id: str, provider: ProviderName) -> None:
+    @on(Select.Changed, "#cto_model_select")
+    @on(Select.Changed, "#developer_model_select")
+    def on_model_select_changed(self, event: Select.Changed) -> None:
+        """Show or hide custom model input based on selection."""
+        if not event.select.id:
+            return
+        prefix = event.select.id.replace("_select", "")
+        input_widget = self.query_one(f"#{prefix}_input", Input)
+        is_custom = event.value == "custom"
+        input_widget.set_class(not is_custom, "hidden")
+        if not is_custom and event.value:
+            input_widget.value = str(event.value)
+
+    def _refresh_model_select(self, select_id: str, input_id: str, provider: ProviderName) -> None:
         """Refresh one model selector for the selected provider."""
-        model_input = self.query_one(select_id, Input)
-        model_input.value = default_model_for_provider(provider)
+        models = models_for_provider(provider)
+        default_model = default_model_for_provider(provider)
+
+        select_widget = self.query_one(select_id, Select)
+        input_widget = self.query_one(input_id, Input)
+
+        select_widget.set_options([(m, m) for m in models] + [("custom", "Custom...")])
+        select_widget.value = default_model
+        input_widget.value = default_model
+        input_widget.set_class(True, "hidden")
 
     def _refresh_reasoning_controls(self, provider: ProviderName) -> None:
         """Show reasoning controls only for providers that support them."""
@@ -609,13 +646,20 @@ class LaunchScreen(Screen[None]):
             return None
         return cast(ProviderName, value)
 
-    def _selected_model(self, provider: ProviderName, select_id: str) -> ProviderModel | None:
+    def _selected_model(self, select_id: str, input_id: str) -> ProviderModel | None:
         """Return the selected model after UI validation."""
-        value = self.query_one(select_id, Input).value.strip()
+        select_widget = self.query_one(select_id, Select)
+        input_widget = self.query_one(input_id, Input)
+
+        if select_widget.value == "custom":
+            value = input_widget.value.strip()
+        else:
+            value = str(select_widget.value or "").strip()
+
         if not value:
-            self.notify(f"{provider} model name is required", severity="error")
+            self.notify("Model name is required", severity="error")
             return None
-        return cast(ProviderModel, value)
+        return value
 
     def _selected_reasoning_effort(self, select_id: str) -> ReasoningEffort | None:
         """Return the selected reasoning effort after UI validation."""

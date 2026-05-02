@@ -46,7 +46,6 @@ def build_provider_command(
                 "--model",
                 model,
                 "--yolo",
-                "--skip-trust",
                 "--output-format",
                 "text",
                 "--prompt",

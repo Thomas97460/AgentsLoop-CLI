@@ -26,6 +26,7 @@
             github-copilot-cli
             nodejs
             codex
+            claude-code
           ];
 
           shellHook = ''
