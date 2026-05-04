@@ -45,7 +45,7 @@ def build_provider_command(
                 "gemini",
                 "--model",
                 model,
-                "--yolo",
+                "--approval-mode=yolo",
                 "--output-format",
                 "text",
                 "--prompt",
