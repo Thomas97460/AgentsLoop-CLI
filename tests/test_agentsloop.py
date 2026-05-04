@@ -171,6 +171,8 @@ def test_provider_command_uses_gemini_headless() -> None:
         "gemini",
         "--model",
         DEFAULT_GEMINI_MODEL,
+        "--approval-mode",
+        "yolo",
         "--yolo",
         "--output-format",
         "text",
