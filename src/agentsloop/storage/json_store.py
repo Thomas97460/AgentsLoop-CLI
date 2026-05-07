@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -29,6 +30,7 @@ from agentsloop.domain.models import (
 type JsonPayload = dict[str, Any] | list[Any]
 EventSink = Callable[[WorkflowEvent], None]
 LOG_TAIL_BYTES = 64 * 1024
+HTTP_429_PATTERN = re.compile(r"(?<!\d)429(?!\d)")
 
 
 def json_dumps(payload: JsonPayload) -> str:
@@ -413,10 +415,21 @@ class RunStore:
     def read_node_log_tail(self, node_run: NodeRun, lines: int = 80) -> str:
         """Read recent stdout/stderr output for one node."""
         parts: list[str] = []
+        total_429 = 0
         for label, path in (("stdout", node_run.stdout_path), ("stderr", node_run.stderr_path)):
             content = read_text_tail(path, lines=lines)
             if content:
+                if node_run.provider == "gemini":
+                    stream_429 = _count_429_lines(content)
+                    if stream_429 > 0:
+                        total_429 += stream_429
+                        continue
                 parts.append(f"[{label}]\n{content}")
+        if node_run.provider == "gemini" and total_429 > 0:
+            parts.insert(
+                0,
+                (f"[gemini] HTTP 429 count: {total_429} (verbose rate-limit logs hidden)"),
+            )
         return "\n\n".join(parts)
 
     def _find_node(self, state: WorkflowState, node_run: NodeRun) -> NodeRun:
@@ -441,3 +454,8 @@ def read_text_tail(path: Path, *, lines: int = 80, max_bytes: int = LOG_TAIL_BYT
     if size > max_bytes:
         text = text.split("\n", 1)[-1]
     return "\n".join(text.splitlines()[-lines:])
+
+
+def _count_429_lines(content: str) -> int:
+    """Count log lines that contain an HTTP 429 marker."""
+    return sum(1 for line in content.splitlines() if HTTP_429_PATTERN.search(line))

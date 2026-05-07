@@ -464,6 +464,53 @@ def test_store_writes_node_artifacts_and_history(tmp_path: Path) -> None:
     assert store.list_runs()[0].provider == DEFAULT_PROVIDER
 
 
+def test_store_compacts_gemini_429_log_noise(tmp_path: Path) -> None:
+    """Show only a 429 counter for verbose Gemini rate-limit logs."""
+    state = run_state(tmp_path)
+    store = RunStore(tmp_path)
+    store.prepare(state)
+    node = store.start_node(
+        state,
+        role="developer",
+        iteration=1,
+        provider="gemini",
+        model=DEFAULT_GEMINI_MODEL,
+    )
+    store.write_node_logs(
+        state,
+        node,
+        stdout="working...",
+        stderr=(
+            "Error: request failed with 429 Too Many Requests\n"
+            "details repeated 429 again\n"
+            "stacktrace ..."
+        ),
+    )
+    tail = store.read_node_log_tail(node)
+    assert "[gemini] HTTP 429 count: 2" in tail
+    assert "verbose rate-limit logs hidden" in tail
+    assert "request failed with 429" not in tail
+    assert "working..." in tail
+
+
+def test_store_keeps_non_gemini_429_logs(tmp_path: Path) -> None:
+    """Do not suppress 429 logs for non-Gemini providers."""
+    state = run_state(tmp_path)
+    store = RunStore(tmp_path)
+    store.prepare(state)
+    node = store.start_node(
+        state,
+        role="developer",
+        iteration=1,
+        provider="codex",
+        model=DEFAULT_CODEX_MODEL,
+    )
+    store.write_node_logs(state, node, stdout="", stderr="Error 429 Too Many Requests")
+    tail = store.read_node_log_tail(node)
+    assert "Error 429 Too Many Requests" in tail
+    assert "HTTP 429 count" not in tail
+
+
 def test_store_reads_old_runs_with_obsolete_codex_models(tmp_path: Path) -> None:
     """Keep the history screen usable when old run artifacts contain removed Codex slugs."""
     state = run_state(tmp_path)
