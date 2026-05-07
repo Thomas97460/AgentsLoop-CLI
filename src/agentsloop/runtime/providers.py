@@ -106,6 +106,9 @@ def run_provider(
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     stderr_path.parent.mkdir(parents=True, exist_ok=True)
     last_message_path = stdout_path.parent / "last-message.md"
+    provider_env = dict(env)
+    if provider == "gemini":
+        provider_env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
     command = build_provider_command(
         provider,
         model,
@@ -122,7 +125,7 @@ def run_provider(
         process = subprocess.Popen(
             command.args,
             cwd=cwd,
-            env=env,
+            env=provider_env,
             stdin=subprocess.PIPE if command.stdin is not None else None,
             stdout=stdout,
             stderr=stderr,

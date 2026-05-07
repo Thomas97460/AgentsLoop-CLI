@@ -46,7 +46,7 @@ from agentsloop.runtime.git_runtime import (
     run_git,
     verify_git_write_access,
 )
-from agentsloop.runtime.providers import build_provider_command
+from agentsloop.runtime.providers import build_provider_command, run_provider
 from agentsloop.runtime.templates import parse_approval_status, render_template, slugify
 from agentsloop.runtime.workflow_control import reconcile_workflow_state, request_workflow_stop
 from agentsloop.runtime.workflow_launcher import spawn_workflow_process
@@ -249,6 +249,53 @@ def test_provider_command_omits_copilot_auto_model_flag() -> None:
         "prompt",
     ]
     assert command.stdin is None
+
+
+def test_run_provider_sets_workspace_trust_for_gemini(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Force trusted workspace mode for Gemini in detached automation runs."""
+
+    class FakePopen:
+        """Capture provider process arguments and environment."""
+
+        returncode = 0
+        last_env: ClassVar[dict[str, str]] = {}
+
+        def __init__(
+            self,
+            _args: list[str],
+            *,
+            cwd: Path,
+            env: dict[str, str],
+            stdin: int | None,
+            stdout: TextIO,
+            stderr: TextIO,
+            text: bool,
+        ) -> None:
+            del cwd, stdin, stderr, text
+            self.__class__.last_env = dict(env)
+            stdout.write("# report")
+
+        def communicate(self, _input: str | None) -> tuple[str, str]:
+            """Emulate process completion."""
+            return ("", "")
+
+    monkeypatch.setattr("agentsloop.runtime.providers.subprocess.Popen", FakePopen)
+    base_env = {"TEST_ENV": "1"}
+    result = run_provider(
+        provider="gemini",
+        model=DEFAULT_GEMINI_MODEL,
+        prompt_md="prompt",
+        cwd=tmp_path,
+        env=base_env,
+        stdout_path=tmp_path / "stdout.log",
+        stderr_path=tmp_path / "stderr.log",
+    )
+    assert result.returncode == 0
+    assert FakePopen.last_env["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
+    assert FakePopen.last_env["TEST_ENV"] == "1"
+    assert "GEMINI_CLI_TRUST_WORKSPACE" not in base_env
 
 
 def test_env_uses_agents_ssh_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
